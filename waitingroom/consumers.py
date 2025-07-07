@@ -4,6 +4,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from asgiref.sync import sync_to_async
 from .models import WaitingRoomEntry, Doctor, Patient
 import uuid
+import random # Import random for PIN generation
 
 class WaitingRoomConsumer(AsyncWebsocketConsumer):
     async def connect(self):
@@ -18,7 +19,6 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
         await self.accept()
         print(f"WebSocket connected for doctor {self.doctor_id}")
 
-        # Send initial waiting list when a client connects (useful for doctor dashboard)
         await self.send_waiting_list()
 
     async def disconnect(self, close_code):
@@ -46,6 +46,7 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
         elif message_type == 'add_patient':
             patient_name = text_data_json.get('patient_name')
             patient_uuid = text_data_json.get('patient_uuid')
+            # This call is already correctly awaited in the receive method
             await self.add_patient_to_waiting_room(patient_name, patient_uuid)
             await self.channel_layer.group_send(
                 self.doctor_group_name,
@@ -64,15 +65,14 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
                     'message': 'Patient removed'
                 }
             )
-        elif message_type == 'purge_history': # NEW: Handle purge history command
-            # Ensure the command is for the correct doctor
+        elif message_type == 'purge_history':
             requested_doctor_id = text_data_json.get('doctor_id')
-            if str(requested_doctor_id) == str(self.doctor_id): # Compare as strings for safety
+            if str(requested_doctor_id) == str(self.doctor_id):
                 await self.purge_doctor_history()
                 await self.channel_layer.group_send(
                     self.doctor_group_name,
                     {
-                        'type': 'waiting_list_update', # Use existing update type to trigger refresh
+                        'type': 'waiting_list_update',
                         'message': 'History purged'
                     }
                 )
@@ -85,6 +85,15 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
 
     async def waiting_list_update(self, event):
         await self.send_waiting_list()
+
+    @sync_to_async
+    def _generate_unique_pin(self):
+        """Generates a unique 6-digit PIN."""
+        while True:
+            pin = str(random.randint(100000, 999999))
+            if not WaitingRoomEntry.objects.filter(host_pin=pin).exists() and \
+               not WaitingRoomEntry.objects.filter(guest_pin=pin).exists():
+                return pin
 
     @sync_to_async
     def get_waiting_list_data(self):
@@ -103,7 +112,9 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
                     'patient_uuid': str(entry.patient.uuid),
                     'status': entry.status,
                     'arrived_at': entry.arrived_at.strftime('%Y-%m-%d %H:%M:%S'),
-                    'doctor_id': entry.doctor.id
+                    'doctor_id': entry.doctor.id,
+                    'host_pin': entry.host_pin,
+                    'guest_pin': entry.guest_pin,
                 })
             return data
         except Doctor.DoesNotExist:
@@ -132,24 +143,36 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             print(f"Error updating status for entry {entry_id}: {e}")
 
-    @sync_to_async
-    def add_patient_to_waiting_room(self, patient_name, patient_uuid):
+    # Removed @sync_to_async from here
+    async def add_patient_to_waiting_room(self, patient_name, patient_uuid):
         try:
-            doctor = Doctor.objects.get(id=self.doctor_id)
+            # All database operations inside this async function must be awaited with sync_to_async
+            doctor = await sync_to_async(Doctor.objects.get)(id=self.doctor_id)
             if patient_uuid:
-                patient, created = Patient.objects.get_or_create(
+                patient, created = await sync_to_async(Patient.objects.get_or_create)(
                     uuid=uuid.UUID(patient_uuid),
                     defaults={'name': patient_name}
                 )
                 if not created and patient.name != patient_name:
                     patient.name = patient_name
-                    patient.save()
+                    await sync_to_async(patient.save)()
             else:
-                patient, created = Patient.objects.get_or_create(name=patient_name)
+                patient, created = await sync_to_async(Patient.objects.get_or_create)(name=patient_name)
 
-            if not WaitingRoomEntry.objects.filter(doctor=doctor, patient=patient, status__in=['Waiting', 'In Progress']).exists():
-                WaitingRoomEntry.objects.create(doctor=doctor, patient=patient, status='Waiting')
-                print(f"Added patient {patient_name} (UUID: {patient.uuid}) to waiting room for doctor {self.doctor_id}")
+            # Check if patient is already in an active queue for this doctor
+            if not await sync_to_async(WaitingRoomEntry.objects.filter(
+                doctor=doctor, patient=patient, status__in=['Waiting', 'In Progress']
+            ).exists)():
+                host_pin = await self._generate_unique_pin()
+                guest_pin = await self._generate_unique_pin()
+                await sync_to_async(WaitingRoomEntry.objects.create)(
+                    doctor=doctor,
+                    patient=patient,
+                    status='Waiting',
+                    host_pin=host_pin,
+                    guest_pin=guest_pin
+                )
+                print(f"Added patient {patient_name} (UUID: {patient.uuid}) to waiting room for doctor {self.doctor_id} with Host PIN: {host_pin}, Guest PIN: {guest_pin}")
             else:
                 print(f"Patient {patient_name} (UUID: {patient.uuid}) is already in the active queue for doctor {self.doctor_id}.")
 
@@ -171,7 +194,6 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
 
     @sync_to_async
     def purge_doctor_history(self):
-        """Deletes all 'Done' and 'Cancelled' entries for the current doctor."""
         try:
             deleted_count, _ = WaitingRoomEntry.objects.filter(
                 doctor_id=self.doctor_id,

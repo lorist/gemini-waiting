@@ -25,7 +25,7 @@
         </div>
 
         <!-- Custom Modal for Alerts/Confirmations -->
-        <div id="customModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center hidden">
+        <div id="customModal" class="fixed inset-0 bg-gray-600 bg-opacity50 flex items-center justify-center hidden">
             <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
                 <h3 id="modalTitle" class="text-lg font-bold mb-4"></h3>
                 <p id="modalMessage" class="mb-6"></p>
@@ -41,7 +41,6 @@
 
 {% block extra_js %}
     <script>
-        // The doctorId is passed from the Django view context
         const doctorId = "{{ doctor.id }}";
         const doctorNameElement = document.getElementById('doctorName');
         const waitingListDiv = document.getElementById('waitingList');
@@ -125,6 +124,9 @@
                     <div class="flex-grow text-center sm:text-left">
                         <p class="text-xl font-semibold text-gray-900">${entry.patient_name}</p>
                         <p class="text-sm text-gray-600">Arrived: ${entry.arrived_at}</p>
+                        <p class="text-xs text-gray-400">UUID: ${entry.patient_uuid}</p>
+                        ${entry.host_pin ? `<p class="text-sm text-gray-700">Host PIN: <span class="font-bold">${entry.host_pin}</span></p>` : ''}
+                        ${entry.guest_pin ? `<p class="text-sm text-gray-700">Guest PIN: <span class="font-bold">${entry.guest_pin}</span></p>` : ''}
                     </div>
                     <div class="flex flex-wrap justify-center sm:justify-end gap-2">
                         <button data-id="${entry.id}" data-status="Waiting" class="status-button status-waiting ${entry.status === 'Waiting' ? 'opacity-100' : 'opacity-50'}">Waiting</button>
@@ -140,7 +142,7 @@
             document.querySelectorAll('.status-button').forEach(button => {
                 button.onclick = function() {
                     const entryId = this.dataset.id;
-                    const action = this.dataset.action; // Get the action (status or remove)
+                    const action = this.dataset.action;
                     const patientName = this.closest('.card').querySelector('p').textContent.split(' for')[0];
 
                     if (action === 'remove') {
@@ -149,7 +151,7 @@
                             `Are you sure you want to remove patient "${patientName}" from the queue? This action cannot be undone.`,
                             () => {
                                 chatSocket.send(JSON.stringify({
-                                    'type': 'remove_patient', // New message type for removal
+                                    'type': 'remove_patient',
                                     'entry_id': entryId
                                 }));
                             },
@@ -187,9 +189,10 @@
                     () => {
                         chatSocket.send(JSON.stringify({
                             'type': 'add_patient',
-                            'patient_name': patientName
+                            'patient_name': patientName,
+                            'patient_uuid': null // When adding from dashboard, we don't have a pre-existing patient UUID
                         }));
-                        newPatientNameInput.value = ''; // Clear input after sending
+                        newPatientNameInput.value = '';
                     },
                     () => {
                         console.log("Add patient cancelled.");

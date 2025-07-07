@@ -41,9 +41,10 @@
             </div>
             <p class="text-sm text-gray-600 mt-4 text-center" id="statusMessage">Waiting for updates...</p>
             <p class="text-xs text-gray-400 mt-2 text-center">Your ID: <span id="myPatientUuid"></span></p>
+            <p class="text-xs text-gray-400 mt-2 text-center" id="myGuestPinDisplay">Guest PIN: <span class="font-bold"></span></p>
         </div>
 
-        <!-- Custom Modal for Alerts/Confirmations -->
+        <!-- Custom Modal for Alerts/Confirmations (reused for Pexip prompt) -->
         <div id="customModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center hidden">
             <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
                 <h3 id="modalTitle" class="text-lg font-bold mb-4"></h3>
@@ -71,6 +72,7 @@
         const myStatusSpan = document.getElementById('myStatus');
         const statusMessageP = document.getElementById('statusMessage');
         const myPatientUuidSpan = document.getElementById('myPatientUuid');
+        const myGuestPinDisplay = document.getElementById('myGuestPinDisplay');
 
         // Modal elements
         const customModal = document.getElementById('customModal');
@@ -84,7 +86,13 @@
         let currentDoctorId = '';
         let currentDoctorName = '';
         let currentPatientUuid = '';
-        let hasJoinedConfirmed = false; // New flag to confirm patient has been added to queue
+        let currentGuestPin = '';
+        let currentHostPin = '';
+        let hasJoinedConfirmed = false;
+
+        // Pexip settings passed from Django context
+        const PEXIP_ADDRESS = "{{ pexip_address }}";
+        const PEXIP_PATH = "{{ pexip_path }}";
 
         const PATIENT_DATA_KEY = 'patientData';
 
@@ -100,7 +108,9 @@
                 name: currentPatientName,
                 uuid: currentPatientUuid,
                 doctorId: currentDoctorId,
-                doctorName: currentDoctorName
+                doctorName: currentDoctorName,
+                guestPin: currentGuestPin,
+                hostPin: currentHostPin
             };
             localStorage.setItem(PATIENT_DATA_KEY, JSON.stringify(data));
         }
@@ -117,9 +127,12 @@
             localStorage.removeItem(PATIENT_DATA_KEY);
         }
 
-        function showCustomModal(title, message, onConfirm = null, onCancel = null) {
+        function showCustomModal(title, message, onConfirm = null, onCancel = null, confirmText = 'OK', cancelText = 'Cancel') {
             modalTitle.textContent = title;
             modalMessage.textContent = message;
+            modalConfirmBtn.textContent = confirmText;
+            modalCancelBtn.textContent = cancelText;
+
             customModal.classList.remove('hidden');
 
             modalConfirmBtn.onclick = () => {
@@ -161,10 +174,29 @@
                 statusMessageP.textContent = `You are currently waiting in the queue.`;
             } else if (status === 'In Progress') {
                 myStatusSpan.classList.add('bg-blue-300', 'text-blue-800');
-                statusMessageP.textContent = `You are currently being seen by the doctor.`;
+                myGuestPinDisplay.querySelector('span').textContent = currentGuestPin;
+                myGuestPinDisplay.classList.remove('hidden');
+                statusMessageP.textContent = `You are currently being seen by the doctor. Please join the call.`;
+
+                showCustomModal(
+                    'Join Doctor\'s Room',
+                    `Your appointment is now in progress. Would you like to join the doctor\'s virtual room?`,
+                    () => {
+                        const pexipUrl = `https://${PEXIP_ADDRESS}/${PEXIP_PATH}/m/?conference=${currentPatientUuid}&name=${encodeURIComponent(currentPatientName)}&role=guest&pin=${currentGuestPin}`;
+                        window.open(pexipUrl, '_blank');
+                        statusMessageP.textContent = `You are in the call with Dr. ${currentDoctorName}.`;
+                    },
+                    () => {
+                        statusMessageP.textContent = `You chose not to join the call at this time. Please wait for further instructions.`;
+                    },
+                    'Join Call',
+                    'Later'
+                );
+
             } else if (status === 'Done') {
                 myStatusSpan.classList.add('bg-green-300', 'text-green-800');
                 statusMessageP.textContent = `Your appointment is complete.`;
+                myGuestPinDisplay.classList.add('hidden');
                 showCustomModal(
                     'Appointment Complete',
                     'Your appointment has been marked as complete. You will now be redirected to the join page.',
@@ -177,6 +209,7 @@
             } else if (status === 'Cancelled') {
                 myStatusSpan.classList.add('bg-red-300', 'text-red-800');
                 statusMessageP.textContent = `Your appointment has been cancelled.`;
+                myGuestPinDisplay.classList.add('hidden');
                 showCustomModal(
                     'Appointment Cancelled',
                     'Your appointment has been cancelled. You will now be redirected to the join page.',
@@ -188,17 +221,17 @@
                 );
             } else {
                 myStatusSpan.classList.add('bg-gray-300', 'text-gray-800');
+                myGuestPinDisplay.classList.add('hidden');
             }
         }
 
         function connectPatientWebSocket() {
-            // Hide form, show status section
             joinFormSection.classList.add('hidden');
             patientStatusSection.classList.remove('hidden');
             myPatientNameSpan.textContent = currentPatientName;
             myDoctorNameSpan.textContent = currentDoctorName;
             myPatientUuidSpan.textContent = currentPatientUuid;
-            updatePatientStatusUI('Waiting'); // Initial status set to Waiting
+            updatePatientStatusUI('Waiting');
 
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = `${protocol}//${window.location.host}/ws/waiting_room/${currentDoctorId}/`;
@@ -226,20 +259,16 @@
                     );
 
                     if (myEntry) {
-                        // Patient entry found in the active list, confirm they are in queue
                         hasJoinedConfirmed = true;
+                        currentGuestPin = myEntry.guest_pin;
+                        currentHostPin = myEntry.host_pin;
                         updatePatientStatusUI(myEntry.status);
                     } else {
-                        // Patient entry not found in the active list
-                        // Only trigger 'Done'/'Cancelled' if they were previously confirmed to be in the queue
                         if (hasJoinedConfirmed) {
-                            // If they were actively waiting/in progress and now not found, assume removed/done
                             if (myStatusSpan.textContent === 'Waiting' || myStatusSpan.textContent === 'In Progress') {
-                                updatePatientStatusUI('Done'); // Default to Done if no longer in active list
+                                updatePatientStatusUI('Done');
                             }
                         }
-                        // If hasJoinedConfirmed is false, it means this is the initial broadcast
-                        // and their entry hasn't been processed yet, so do nothing.
                     }
                 } else if (data.type === 'error') {
                     showCustomModal('Error', data.message);
@@ -283,7 +312,9 @@
                     currentDoctorId = selectedDoctorId;
                     currentDoctorName = selectedDoctorName;
                     currentPatientUuid = generateUUID();
-                    hasJoinedConfirmed = false; // Reset flag for new join attempt
+                    hasJoinedConfirmed = false;
+                    currentGuestPin = '';
+                    currentHostPin = '';
 
                     connectPatientWebSocket();
                     patientNameInput.value = '';
@@ -301,7 +332,8 @@
                 currentPatientUuid = savedPatientData.uuid;
                 currentDoctorId = savedPatientData.doctorId;
                 currentDoctorName = savedPatientData.doctorName;
-                // Set hasJoinedConfirmed to true if resuming a session, as they were already in queue
+                currentGuestPin = savedPatientData.guestPin || '';
+                currentHostPin = savedPatientData.hostPin || '';
                 hasJoinedConfirmed = true;
                 showCustomModal(
                     'Resume Session',

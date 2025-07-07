@@ -134,3 +134,9 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Pexip Integration Settings (NEW)
+# These can be set via environment variables (e.g., PEXIP_ADDRESS=vc.example.com)
+# or use the default values provided here.
+PEXIP_ADDRESS = os.environ.get('PEXIP_ADDRESS', 'internal.lorist.org') # Replace with your Pexip Infinity address
+PEXIP_PATH = os.environ.get('PEXIP_PATH', 'webapp') # Replace with your Pexip webapp path (e.g., 'webapp' or 'client')

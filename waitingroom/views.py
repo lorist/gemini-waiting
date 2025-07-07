@@ -1,18 +1,19 @@
 # waitingroom/views.py
-#https://gemini.google.com/app/f8d063d46c0e1969
-# daphne -p 8000 --verbosity 2 waitingproj.asgi:application
-
 from django.shortcuts import render, get_object_or_404
-from .models import Doctor, WaitingRoomEntry # Import WaitingRoomEntry
+from .models import Doctor, WaitingRoomEntry
+from django.conf import settings # Import settings
 
 def patient_waiting_room_view(request):
     """
     Renders the patient-facing HTML page for joining a doctor's waiting room.
     Fetches all doctors from the database to populate the dropdown.
+    Passes Pexip configuration to the template.
     """
     doctors = Doctor.objects.all().order_by('name') # Fetch all doctors, ordered by name
     context = {
         'doctors': doctors,
+        'pexip_address': settings.PEXIP_ADDRESS, # Pass Pexip address
+        'pexip_path': settings.PEXIP_PATH,       # Pass Pexip path
     }
     return render(request, 'waitingroom/patient_waiting_room.html', context)
 
@@ -35,8 +36,8 @@ def doctor_history_view(request, doctor_id):
     doctor = get_object_or_404(Doctor, pk=doctor_id)
     historical_entries = WaitingRoomEntry.objects.filter(
         doctor=doctor,
-        status__in=['Done', 'Cancelled'] # Filter for historical statuses
-    ).select_related('patient').order_by('-arrived_at') # Order by most recent first
+        status__in=['Done', 'Cancelled']
+    ).select_related('patient').order_by('-arrived_at')
 
     context = {
         'doctor': doctor,
