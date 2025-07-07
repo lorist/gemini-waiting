@@ -40,6 +40,7 @@
                 <span id="myStatus" class="py-2 px-4 rounded-full text-lg font-bold">Loading...</span>
             </div>
             <p class="text-sm text-gray-600 mt-4 text-center" id="statusMessage">Waiting for updates...</p>
+            <p class="text-xs text-gray-400 mt-2 text-center">Your ID: <span id="myPatientUuid"></span></p>
         </div>
 
         <!-- Custom Modal for Alerts/Confirmations -->
@@ -69,6 +70,7 @@
         const myDoctorNameSpan = document.getElementById('myDoctorName');
         const myStatusSpan = document.getElementById('myStatus');
         const statusMessageP = document.getElementById('statusMessage');
+        const myPatientUuidSpan = document.getElementById('myPatientUuid');
 
         // Modal elements
         const customModal = document.getElementById('customModal');
@@ -77,10 +79,43 @@
         const modalConfirmBtn = document.getElementById('modalConfirmBtn');
         const modalCancelBtn = document.getElementById('modalCancelBtn');
 
-        let patientSocket = null; // Declare patientSocket globally or in a scope accessible to all functions
+        let patientSocket = null;
         let currentPatientName = '';
         let currentDoctorId = '';
         let currentDoctorName = '';
+        let currentPatientUuid = '';
+        let hasJoinedConfirmed = false; // New flag to confirm patient has been added to queue
+
+        const PATIENT_DATA_KEY = 'patientData';
+
+        function generateUUID() {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+
+        function savePatientData() {
+            const data = {
+                name: currentPatientName,
+                uuid: currentPatientUuid,
+                doctorId: currentDoctorId,
+                doctorName: currentDoctorName
+            };
+            localStorage.setItem(PATIENT_DATA_KEY, JSON.stringify(data));
+        }
+
+        function loadPatientData() {
+            const data = localStorage.getItem(PATIENT_DATA_KEY);
+            if (data) {
+                return JSON.parse(data);
+            }
+            return null;
+        }
+
+        function clearPatientData() {
+            localStorage.removeItem(PATIENT_DATA_KEY);
+        }
 
         function showCustomModal(title, message, onConfirm = null, onCancel = null) {
             modalTitle.textContent = title;
@@ -130,30 +165,100 @@
             } else if (status === 'Done') {
                 myStatusSpan.classList.add('bg-green-300', 'text-green-800');
                 statusMessageP.textContent = `Your appointment is complete.`;
-                // Show modal and redirect
                 showCustomModal(
                     'Appointment Complete',
                     'Your appointment has been marked as complete. You will now be redirected to the join page.',
                     () => {
-                        if (patientSocket) patientSocket.close(); // Close WebSocket
-                        window.location.href = '/join-queue/'; // Redirect
+                        if (patientSocket) patientSocket.close();
+                        clearPatientData();
+                        window.location.href = '/join-queue/';
                     }
                 );
             } else if (status === 'Cancelled') {
                 myStatusSpan.classList.add('bg-red-300', 'text-red-800');
                 statusMessageP.textContent = `Your appointment has been cancelled.`;
-                // Show modal and redirect
                 showCustomModal(
                     'Appointment Cancelled',
                     'Your appointment has been cancelled. You will now be redirected to the join page.',
                     () => {
-                        if (patientSocket) patientSocket.close(); // Close WebSocket
-                        window.location.href = '/join-queue/'; // Redirect
+                        if (patientSocket) patientSocket.close();
+                        clearPatientData();
+                        window.location.href = '/join-queue/';
                     }
                 );
             } else {
                 myStatusSpan.classList.add('bg-gray-300', 'text-gray-800');
             }
+        }
+
+        function connectPatientWebSocket() {
+            // Hide form, show status section
+            joinFormSection.classList.add('hidden');
+            patientStatusSection.classList.remove('hidden');
+            myPatientNameSpan.textContent = currentPatientName;
+            myDoctorNameSpan.textContent = currentDoctorName;
+            myPatientUuidSpan.textContent = currentPatientUuid;
+            updatePatientStatusUI('Waiting'); // Initial status set to Waiting
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/waiting_room/${currentDoctorId}/`;
+            patientSocket = new WebSocket(wsUrl);
+
+            patientSocket.onopen = function(e) {
+                console.log(`Patient WebSocket opened for doctor ${currentDoctorId}. Sending add_patient message.`);
+                patientSocket.send(JSON.stringify({
+                    'type': 'add_patient',
+                    'patient_name': currentPatientName,
+                    'patient_uuid': currentPatientUuid
+                }));
+                displayMessage(`You have joined Dr. ${currentDoctorName}'s queue.`, 'success');
+                savePatientData();
+            };
+
+            patientSocket.onmessage = function(e) {
+                const data = JSON.parse(e.data);
+                console.log("Patient received message:", data);
+
+                if (data.type === 'waiting_list') {
+                    const myEntry = data.data.find(entry =>
+                        entry.patient_uuid === currentPatientUuid &&
+                        entry.doctor_id == currentDoctorId
+                    );
+
+                    if (myEntry) {
+                        // Patient entry found in the active list, confirm they are in queue
+                        hasJoinedConfirmed = true;
+                        updatePatientStatusUI(myEntry.status);
+                    } else {
+                        // Patient entry not found in the active list
+                        // Only trigger 'Done'/'Cancelled' if they were previously confirmed to be in the queue
+                        if (hasJoinedConfirmed) {
+                            // If they were actively waiting/in progress and now not found, assume removed/done
+                            if (myStatusSpan.textContent === 'Waiting' || myStatusSpan.textContent === 'In Progress') {
+                                updatePatientStatusUI('Done'); // Default to Done if no longer in active list
+                            }
+                        }
+                        // If hasJoinedConfirmed is false, it means this is the initial broadcast
+                        // and their entry hasn't been processed yet, so do nothing.
+                    }
+                } else if (data.type === 'error') {
+                    showCustomModal('Error', data.message);
+                }
+            };
+
+            patientSocket.onclose = function(e) {
+                console.error('Patient WebSocket closed unexpectedly:', e);
+                statusMessageP.textContent = "Disconnected from updates. Please refresh.";
+                if (myStatusSpan.textContent !== 'Done' && myStatusSpan.textContent !== 'Cancelled') {
+                    showCustomModal('Disconnected', 'The connection to the waiting room updates has been lost. Please refresh the page.');
+                }
+            };
+
+            patientSocket.onerror = function(e) {
+                console.error('Patient WebSocket error:', e);
+                statusMessageP.textContent = "Error connecting to updates. Please refresh.";
+                showCustomModal('Connection Error', 'An error occurred with the WebSocket connection. Please refresh the page.');
+            };
         }
 
         joinQueueBtn.onclick = function() {
@@ -177,74 +282,41 @@
                     currentPatientName = patientName;
                     currentDoctorId = selectedDoctorId;
                     currentDoctorName = selectedDoctorName;
+                    currentPatientUuid = generateUUID();
+                    hasJoinedConfirmed = false; // Reset flag for new join attempt
 
-                    // Hide form, show status section
-                    joinFormSection.classList.add('hidden');
-                    patientStatusSection.classList.remove('hidden');
-                    myPatientNameSpan.textContent = currentPatientName;
-                    myDoctorNameSpan.textContent = currentDoctorName;
-                    updatePatientStatusUI('Waiting'); // Initial status set to Waiting
-
-                    // Establish WebSocket connection
-                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                    const wsUrl = `${protocol}//${window.location.host}/ws/waiting_room/${currentDoctorId}/`;
-                    patientSocket = new WebSocket(wsUrl); // Assign to global variable
-
-                    patientSocket.onopen = function(e) {
-                        console.log(`Patient WebSocket opened for doctor ${currentDoctorId}. Sending add_patient message.`);
-                        patientSocket.send(JSON.stringify({
-                            'type': 'add_patient',
-                            'patient_name': currentPatientName
-                        }));
-                        displayMessage(`You have joined Dr. ${currentDoctorName}'s queue.`, 'success');
-                    };
-
-                    patientSocket.onmessage = function(e) {
-                        const data = JSON.parse(e.data);
-                        console.log("Patient received message:", data);
-
-                        if (data.type === 'waiting_list') {
-                            // Find our own patient entry in the updated list
-                            const myEntry = data.data.find(entry =>
-                                entry.patient_name === currentPatientName &&
-                                entry.doctor_id == currentDoctorId
-                            );
-
-                            if (myEntry) {
-                                updatePatientStatusUI(myEntry.status);
-                            } else {
-                                // If our entry is not found, it means we were removed or completed
-                                // We'll trigger the 'Done' or 'Cancelled' flow based on current status
-                                // to avoid immediate redirect if they were just 'Waiting'
-                                if (myStatusSpan.textContent === 'Waiting' || myStatusSpan.textContent === 'In Progress') {
-                                    // If they were actively waiting/in progress and now not found, assume removed/done
-                                    updatePatientStatusUI('Done'); // Default to Done if not found
-                                }
-                            }
-                        } else if (data.type === 'error') {
-                            showCustomModal('Error', data.message);
-                        }
-                    };
-
-                    patientSocket.onclose = function(e) {
-                        console.error('Patient WebSocket closed unexpectedly:', e);
-                        statusMessageP.textContent = "Disconnected from updates. Please refresh.";
-                        // Only show modal if not already redirecting due to 'Done'/'Cancelled'
-                        if (myStatusSpan.textContent !== 'Done' && myStatusSpan.textContent !== 'Cancelled') {
-                            showCustomModal('Disconnected', 'The connection to the waiting room updates has been lost. Please refresh the page.');
-                        }
-                    };
-
-                    patientSocket.onerror = function(e) {
-                        console.error('Patient WebSocket error:', e);
-                        statusMessageP.textContent = "Error connecting to updates. Please refresh.";
-                        showCustomModal('Connection Error', 'An error occurred with the WebSocket connection. Please refresh the page.');
-                    };
+                    connectPatientWebSocket();
+                    patientNameInput.value = '';
                 },
                 () => {
                     console.log("Join queue cancelled.");
                 }
             );
         };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const savedPatientData = loadPatientData();
+            if (savedPatientData) {
+                currentPatientName = savedPatientData.name;
+                currentPatientUuid = savedPatientData.uuid;
+                currentDoctorId = savedPatientData.doctorId;
+                currentDoctorName = savedPatientData.doctorName;
+                // Set hasJoinedConfirmed to true if resuming a session, as they were already in queue
+                hasJoinedConfirmed = true;
+                showCustomModal(
+                    'Resume Session',
+                    `Welcome back, ${currentPatientName}! Do you want to resume your session with Dr. ${currentDoctorName}?`,
+                    () => {
+                        connectPatientWebSocket();
+                    },
+                    () => {
+                        clearPatientData();
+                        joinFormSection.classList.remove('hidden');
+                    }
+                );
+            } else {
+                joinFormSection.classList.remove('hidden');
+            }
+        });
     </script>
 {% endblock %}

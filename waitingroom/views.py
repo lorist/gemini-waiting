@@ -1,4 +1,7 @@
 # waitingroom/views.py
+#https://gemini.google.com/app/f8d063d46c0e1969
+# daphne -p 8000 --verbosity 2 waitingproj.asgi:application
+
 from django.shortcuts import render, get_object_or_404
 from .models import Doctor, WaitingRoomEntry # Import WaitingRoomEntry
 

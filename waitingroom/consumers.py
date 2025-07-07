@@ -3,13 +3,13 @@ import json
 from channels.generic.websocket import AsyncWebsocketConsumer
 from asgiref.sync import sync_to_async
 from .models import WaitingRoomEntry, Doctor, Patient
+import uuid
 
 class WaitingRoomConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.doctor_id = self.scope['url_route']['kwargs']['doctor_id']
         self.doctor_group_name = f'waiting_room_{self.doctor_id}'
 
-        # Join room group
         await self.channel_layer.group_add(
             self.doctor_group_name,
             self.channel_name
@@ -18,19 +18,16 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
         await self.accept()
         print(f"WebSocket connected for doctor {self.doctor_id}")
 
-        # REMOVED: No longer send initial waiting list here for patients.
-        # The 'add_patient' message or doctor dashboard connection will trigger updates.
-        # await self.send_waiting_list()
+        # Send initial waiting list when a client connects (useful for doctor dashboard)
+        await self.send_waiting_list()
 
     async def disconnect(self, close_code):
-        # Leave room group
         await self.channel_layer.group_discard(
             self.doctor_group_name,
             self.channel_name
         )
         print(f"WebSocket disconnected for doctor {self.doctor_id} with code {close_code}")
 
-    # Receive message from WebSocket
     async def receive(self, text_data):
         text_data_json = json.loads(text_data)
         message_type = text_data_json.get('type')
@@ -39,17 +36,17 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
             entry_id = text_data_json.get('entry_id')
             new_status = text_data_json.get('status')
             await self.update_waiting_entry_status(entry_id, new_status)
-            # After updating, broadcast the new list to all clients in the group
             await self.channel_layer.group_send(
                 self.doctor_group_name,
                 {
                     'type': 'waiting_list_update',
-                    'message': 'Waiting list updated' # A generic message, actual data will be fetched by the handler
+                    'message': 'Waiting list updated'
                 }
             )
         elif message_type == 'add_patient':
             patient_name = text_data_json.get('patient_name')
-            await self.add_patient_to_waiting_room(patient_name)
+            patient_uuid = text_data_json.get('patient_uuid')
+            await self.add_patient_to_waiting_room(patient_name, patient_uuid)
             await self.channel_layer.group_send(
                 self.doctor_group_name,
                 {
@@ -57,7 +54,7 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
                     'message': 'New patient added'
                 }
             )
-        elif message_type == 'remove_patient': # This action explicitly deletes the entry
+        elif message_type == 'remove_patient':
             entry_id = text_data_json.get('entry_id')
             await self.remove_waiting_entry(entry_id)
             await self.channel_layer.group_send(
@@ -67,33 +64,46 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
                     'message': 'Patient removed'
                 }
             )
+        elif message_type == 'purge_history': # NEW: Handle purge history command
+            # Ensure the command is for the correct doctor
+            requested_doctor_id = text_data_json.get('doctor_id')
+            if str(requested_doctor_id) == str(self.doctor_id): # Compare as strings for safety
+                await self.purge_doctor_history()
+                await self.channel_layer.group_send(
+                    self.doctor_group_name,
+                    {
+                        'type': 'waiting_list_update', # Use existing update type to trigger refresh
+                        'message': 'History purged'
+                    }
+                )
+            else:
+                await self.send(text_data=json.dumps({
+                    'type': 'error',
+                    'message': 'Unauthorized purge request.'
+                }))
 
-    # Receive message from room group (broadcast to all connected clients in the group)
+
     async def waiting_list_update(self, event):
-        # Send updated waiting list to WebSocket
         await self.send_waiting_list()
 
     @sync_to_async
     def get_waiting_list_data(self):
-        """
-        Fetches the current ACTIVE waiting list for the doctor.
-        Excludes patients with 'Done' or 'Cancelled' status.
-        """
         try:
             doctor = Doctor.objects.get(id=self.doctor_id)
             waiting_entries = WaitingRoomEntry.objects.filter(
                 doctor=doctor
             ).exclude(
-                status__in=['Done', 'Cancelled'] # Filter out done/cancelled patients
+                status__in=['Done', 'Cancelled']
             ).select_related('patient').order_by('arrived_at')
             data = []
             for entry in waiting_entries:
                 data.append({
                     'id': entry.id,
                     'patient_name': entry.patient.name,
+                    'patient_uuid': str(entry.patient.uuid),
                     'status': entry.status,
                     'arrived_at': entry.arrived_at.strftime('%Y-%m-%d %H:%M:%S'),
-                    'doctor_id': entry.doctor.id # NEW: Include doctor_id for patient-side filtering
+                    'doctor_id': entry.doctor.id
                 })
             return data
         except Doctor.DoesNotExist:
@@ -104,7 +114,6 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
             return []
 
     async def send_waiting_list(self):
-        """Sends the current waiting list to the connected client."""
         waiting_list = await self.get_waiting_list_data()
         await self.send(text_data=json.dumps({
             'type': 'waiting_list',
@@ -113,7 +122,6 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
 
     @sync_to_async
     def update_waiting_entry_status(self, entry_id, new_status):
-        """Updates the status of a waiting room entry."""
         try:
             entry = WaitingRoomEntry.objects.get(id=entry_id, doctor_id=self.doctor_id)
             entry.status = new_status
@@ -125,14 +133,26 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
             print(f"Error updating status for entry {entry_id}: {e}")
 
     @sync_to_async
-    def add_patient_to_waiting_room(self, patient_name):
-        """Adds a new patient to the waiting room."""
+    def add_patient_to_waiting_room(self, patient_name, patient_uuid):
         try:
             doctor = Doctor.objects.get(id=self.doctor_id)
-            # Find or create patient
-            patient, created = Patient.objects.get_or_create(name=patient_name)
-            WaitingRoomEntry.objects.create(doctor=doctor, patient=patient, status='Waiting')
-            print(f"Added patient {patient_name} to waiting room for doctor {self.doctor_id}")
+            if patient_uuid:
+                patient, created = Patient.objects.get_or_create(
+                    uuid=uuid.UUID(patient_uuid),
+                    defaults={'name': patient_name}
+                )
+                if not created and patient.name != patient_name:
+                    patient.name = patient_name
+                    patient.save()
+            else:
+                patient, created = Patient.objects.get_or_create(name=patient_name)
+
+            if not WaitingRoomEntry.objects.filter(doctor=doctor, patient=patient, status__in=['Waiting', 'In Progress']).exists():
+                WaitingRoomEntry.objects.create(doctor=doctor, patient=patient, status='Waiting')
+                print(f"Added patient {patient_name} (UUID: {patient.uuid}) to waiting room for doctor {self.doctor_id}")
+            else:
+                print(f"Patient {patient_name} (UUID: {patient.uuid}) is already in the active queue for doctor {self.doctor_id}.")
+
         except Doctor.DoesNotExist:
             print(f"Doctor with ID {self.doctor_id} not found.")
         except Exception as e:
@@ -140,7 +160,6 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
 
     @sync_to_async
     def remove_waiting_entry(self, entry_id):
-        """Removes a waiting room entry from the database."""
         try:
             entry = WaitingRoomEntry.objects.get(id=entry_id, doctor_id=self.doctor_id)
             entry.delete()
@@ -149,4 +168,16 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
             print(f"WaitingRoomEntry with ID {entry_id} not found for doctor {self.doctor_id}.")
         except Exception as e:
             print(f"Error removing entry {entry_id}: {e}")
+
+    @sync_to_async
+    def purge_doctor_history(self):
+        """Deletes all 'Done' and 'Cancelled' entries for the current doctor."""
+        try:
+            deleted_count, _ = WaitingRoomEntry.objects.filter(
+                doctor_id=self.doctor_id,
+                status__in=['Done', 'Cancelled']
+            ).delete()
+            print(f"Purged {deleted_count} historical entries for doctor {self.doctor_id}.")
+        except Exception as e:
+            print(f"Error purging history for doctor {self.doctor_id}: {e}")
 
