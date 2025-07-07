@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+.vscode/ # VS Code specific settings, if not shared
+.idea/ # PyCharm specific settings
+
+# Django
+*.log
+*.sqlite3
+db.sqlite3
+/media/
+/static/
+*/migrations/*.py
+!*/migrations/__init__.py
+.env # Environment variables
+.DS_Store # macOS specific
+.ipynb_checkpoints/ # Jupyter notebooks
+
+# Daphne/Channels logs
+daphne.log
+
+# Operating System Files
+.DS_Store
+.Trashes
+ehthumbs.db
+Thumbs.db

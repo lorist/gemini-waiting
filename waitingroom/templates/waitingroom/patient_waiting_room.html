@@ -1,0 +1,250 @@
+{# waitingroom/templates/waitingroom/patient_waiting_room.html #}
+{% extends 'base.html' %} {# This line tells Django to use base.html as the parent #}
+
+{% block title %}Join Waiting Room - My App{% endblock %}
+
+{% block content %}
+    <div class="container mx-auto p-6 card">
+        <h1 class="text-3xl font-bold text-gray-800 mb-6 text-center">Join a Doctor's Waiting Room</h1>
+
+        <div class="space-y-6" id="joinFormSection">
+            <div>
+                <label for="doctorSelect" class="block text-gray-700 text-sm font-bold mb-2">Select Doctor:</label>
+                <select id="doctorSelect" class="form-input">
+                    <!-- Doctors will be loaded here dynamically by Django -->
+                    <option value="">-- Select a Doctor --</option>
+                    {% for doctor in doctors %}
+                        <option value="{{ doctor.id }}">{{ doctor.name }}</option>
+                    {% empty %}
+                        <option value="">No doctors available</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div>
+                <label for="patientName" class="block text-gray-700 text-sm font-bold mb-2">Your Name:</label>
+                <input type="text" id="patientName" placeholder="Enter your name" class="form-input">
+            </div>
+
+            <button id="joinQueueBtn" class="w-full bg-blue-600 text-white px-6 py-3 rounded-md font-semibold hover:bg-blue-700 transition duration-200 ease-in-out shadow-md">Join Queue</button>
+
+            <div id="messageArea" class="mt-4 p-3 rounded-md text-center hidden"></div>
+        </div>
+
+        <div id="patientStatusSection" class="hidden mt-8 p-6 card border border-blue-200">
+            <h2 class="text-2xl font-bold text-blue-700 mb-4 text-center">Your Queue Status</h2>
+            <p class="text-lg text-gray-800 mb-2">Hello, <span id="myPatientName" class="font-semibold"></span>!</p>
+            <p class="text-lg text-gray-800 mb-4">You are in Dr. <span id="myDoctorName" class="font-semibold"></span>'s queue.</p>
+            <div class="flex items-center justify-center space-x-2">
+                <p class="text-xl font-bold text-gray-900">Current Status:</p>
+                <span id="myStatus" class="py-2 px-4 rounded-full text-lg font-bold">Loading...</span>
+            </div>
+            <p class="text-sm text-gray-600 mt-4 text-center" id="statusMessage">Waiting for updates...</p>
+        </div>
+
+        <!-- Custom Modal for Alerts/Confirmations -->
+        <div id="customModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center hidden">
+            <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
+                <h3 id="modalTitle" class="text-lg font-bold mb-4"></h3>
+                <p id="modalMessage" class="mb-6"></p>
+                <div class="flex justify-end space-x-3">
+                    <button id="modalCancelBtn" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 transition duration-200 hidden">Cancel</button>
+                    <button id="modalConfirmBtn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition duration-200">OK</button>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endblock %}
+
+{% block extra_js %}
+    <script>
+        const doctorSelect = document.getElementById('doctorSelect');
+        const patientNameInput = document.getElementById('patientName');
+        const joinQueueBtn = document.getElementById('joinQueueBtn');
+        const messageArea = document.getElementById('messageArea');
+
+        const joinFormSection = document.getElementById('joinFormSection');
+        const patientStatusSection = document.getElementById('patientStatusSection');
+        const myPatientNameSpan = document.getElementById('myPatientName');
+        const myDoctorNameSpan = document.getElementById('myDoctorName');
+        const myStatusSpan = document.getElementById('myStatus');
+        const statusMessageP = document.getElementById('statusMessage');
+
+        // Modal elements
+        const customModal = document.getElementById('customModal');
+        const modalTitle = document.getElementById('modalTitle');
+        const modalMessage = document.getElementById('modalMessage');
+        const modalConfirmBtn = document.getElementById('modalConfirmBtn');
+        const modalCancelBtn = document.getElementById('modalCancelBtn');
+
+        let patientSocket = null; // Declare patientSocket globally or in a scope accessible to all functions
+        let currentPatientName = '';
+        let currentDoctorId = '';
+        let currentDoctorName = '';
+
+        function showCustomModal(title, message, onConfirm = null, onCancel = null) {
+            modalTitle.textContent = title;
+            modalMessage.textContent = message;
+            customModal.classList.remove('hidden');
+
+            modalConfirmBtn.onclick = () => {
+                customModal.classList.add('hidden');
+                if (onConfirm) onConfirm();
+            };
+
+            if (onCancel) {
+                modalCancelBtn.classList.remove('hidden');
+                modalCancelBtn.onclick = () => {
+                    customModal.classList.add('hidden');
+                    onCancel();
+                };
+            } else {
+                modalCancelBtn.classList.add('hidden');
+            }
+        }
+
+        function displayMessage(message, type = 'info') {
+            messageArea.textContent = message;
+            messageArea.classList.remove('hidden', 'bg-red-100', 'text-red-700', 'bg-green-100', 'text-green-700', 'bg-blue-100', 'text-blue-700');
+            if (type === 'error') {
+                messageArea.classList.add('bg-red-100', 'text-red-700');
+            } else if (type === 'success') {
+                messageArea.classList.add('bg-green-100', 'text-green-700');
+            } else { // info
+                messageArea.classList.add('bg-blue-100', 'text-blue-700');
+            }
+        }
+
+        function updatePatientStatusUI(status) {
+            myStatusSpan.textContent = status;
+            myStatusSpan.className = 'py-2 px-4 rounded-full text-lg font-bold'; // Reset classes
+            statusMessageP.textContent = `Your status was last updated at ${new Date().toLocaleTimeString()}.`;
+
+            // Apply status-specific styling
+            if (status === 'Waiting') {
+                myStatusSpan.classList.add('bg-yellow-300', 'text-yellow-800');
+                statusMessageP.textContent = `You are currently waiting in the queue.`;
+            } else if (status === 'In Progress') {
+                myStatusSpan.classList.add('bg-blue-300', 'text-blue-800');
+                statusMessageP.textContent = `You are currently being seen by the doctor.`;
+            } else if (status === 'Done') {
+                myStatusSpan.classList.add('bg-green-300', 'text-green-800');
+                statusMessageP.textContent = `Your appointment is complete.`;
+                // Show modal and redirect
+                showCustomModal(
+                    'Appointment Complete',
+                    'Your appointment has been marked as complete. You will now be redirected to the join page.',
+                    () => {
+                        if (patientSocket) patientSocket.close(); // Close WebSocket
+                        window.location.href = '/join-queue/'; // Redirect
+                    }
+                );
+            } else if (status === 'Cancelled') {
+                myStatusSpan.classList.add('bg-red-300', 'text-red-800');
+                statusMessageP.textContent = `Your appointment has been cancelled.`;
+                // Show modal and redirect
+                showCustomModal(
+                    'Appointment Cancelled',
+                    'Your appointment has been cancelled. You will now be redirected to the join page.',
+                    () => {
+                        if (patientSocket) patientSocket.close(); // Close WebSocket
+                        window.location.href = '/join-queue/'; // Redirect
+                    }
+                );
+            } else {
+                myStatusSpan.classList.add('bg-gray-300', 'text-gray-800');
+            }
+        }
+
+        joinQueueBtn.onclick = function() {
+            const selectedDoctorId = doctorSelect.value;
+            const patientName = patientNameInput.value.trim();
+            const selectedDoctorName = doctorSelect.options[doctorSelect.selectedIndex].textContent;
+
+            if (!selectedDoctorId) {
+                showCustomModal('Selection Required', 'Please select a doctor.');
+                return;
+            }
+            if (!patientName) {
+                showCustomModal('Input Required', 'Please enter your name.');
+                return;
+            }
+
+            showCustomModal(
+                'Confirm Join Queue',
+                `Are you sure you want to join Dr. ${selectedDoctorName}'s queue as "${patientName}"?`,
+                () => {
+                    currentPatientName = patientName;
+                    currentDoctorId = selectedDoctorId;
+                    currentDoctorName = selectedDoctorName;
+
+                    // Hide form, show status section
+                    joinFormSection.classList.add('hidden');
+                    patientStatusSection.classList.remove('hidden');
+                    myPatientNameSpan.textContent = currentPatientName;
+                    myDoctorNameSpan.textContent = currentDoctorName;
+                    updatePatientStatusUI('Waiting'); // Initial status set to Waiting
+
+                    // Establish WebSocket connection
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const wsUrl = `${protocol}//${window.location.host}/ws/waiting_room/${currentDoctorId}/`;
+                    patientSocket = new WebSocket(wsUrl); // Assign to global variable
+
+                    patientSocket.onopen = function(e) {
+                        console.log(`Patient WebSocket opened for doctor ${currentDoctorId}. Sending add_patient message.`);
+                        patientSocket.send(JSON.stringify({
+                            'type': 'add_patient',
+                            'patient_name': currentPatientName
+                        }));
+                        displayMessage(`You have joined Dr. ${currentDoctorName}'s queue.`, 'success');
+                    };
+
+                    patientSocket.onmessage = function(e) {
+                        const data = JSON.parse(e.data);
+                        console.log("Patient received message:", data);
+
+                        if (data.type === 'waiting_list') {
+                            // Find our own patient entry in the updated list
+                            const myEntry = data.data.find(entry =>
+                                entry.patient_name === currentPatientName &&
+                                entry.doctor_id == currentDoctorId
+                            );
+
+                            if (myEntry) {
+                                updatePatientStatusUI(myEntry.status);
+                            } else {
+                                // If our entry is not found, it means we were removed or completed
+                                // We'll trigger the 'Done' or 'Cancelled' flow based on current status
+                                // to avoid immediate redirect if they were just 'Waiting'
+                                if (myStatusSpan.textContent === 'Waiting' || myStatusSpan.textContent === 'In Progress') {
+                                    // If they were actively waiting/in progress and now not found, assume removed/done
+                                    updatePatientStatusUI('Done'); // Default to Done if not found
+                                }
+                            }
+                        } else if (data.type === 'error') {
+                            showCustomModal('Error', data.message);
+                        }
+                    };
+
+                    patientSocket.onclose = function(e) {
+                        console.error('Patient WebSocket closed unexpectedly:', e);
+                        statusMessageP.textContent = "Disconnected from updates. Please refresh.";
+                        // Only show modal if not already redirecting due to 'Done'/'Cancelled'
+                        if (myStatusSpan.textContent !== 'Done' && myStatusSpan.textContent !== 'Cancelled') {
+                            showCustomModal('Disconnected', 'The connection to the waiting room updates has been lost. Please refresh the page.');
+                        }
+                    };
+
+                    patientSocket.onerror = function(e) {
+                        console.error('Patient WebSocket error:', e);
+                        statusMessageP.textContent = "Error connecting to updates. Please refresh.";
+                        showCustomModal('Connection Error', 'An error occurred with the WebSocket connection. Please refresh the page.');
+                    };
+                },
+                () => {
+                    console.log("Join queue cancelled.");
+                }
+            );
+        };
+    </script>
+{% endblock %}

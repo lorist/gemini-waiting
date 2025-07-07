@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}My App{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    {% block extra_head %}{% endblock %} {# For additional CSS/meta tags specific to a page #}
+</head>
+<body class="bg-gray-100 font-inter">
+    <nav class="bg-blue-600 p-4 text-white shadow-md">
+        <div class="container mx-auto flex justify-between items-center">
+            <a href="/" class="text-2xl font-bold">Waiting Room App</a>
+            <div>
+                {# Navigation links here #}
+            </div>
+        </div>
+    </nav>
+
+    <main class="container mx-auto mt-8 p-4">
+        {% block content %}
+            {# Content from child templates will go here #}
+        {% endblock %}
+    </main>
+
+    {% block extra_js %}{% endblock %} {# For page-specific JavaScript #}
+</body>
+</html>

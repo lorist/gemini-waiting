@@ -1,0 +1,204 @@
+{# waitingroom/templates/waitingroom/doctor_dashboard.html #}
+{% extends 'base.html' %} {# This line tells Django to use base.html as the parent #}
+
+{% block title %}Dr. {{ doctor.name }}'s Dashboard - My App{% endblock %}
+
+{% block content %}
+    <div class="container mx-auto p-6 card">
+        <h1 class="text-3xl font-bold text-gray-800 mb-6 text-center">Dr. <span id="doctorName">{{ doctor.name }}</span>'s Waiting Room</h1>
+
+        <div class="mb-6 p-4 border border-gray-200 rounded-lg bg-gray-50 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <input type="text" id="newPatientName" placeholder="Enter new patient name" class="flex-grow p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <button id="addPatientBtn" class="bg-blue-600 text-white px-6 py-3 rounded-md font-semibold hover:bg-blue-700 transition duration-200 ease-in-out shadow-md">Add Patient to Queue</button>
+        </div>
+
+        <div id="waitingList" class="space-y-4">
+            <!-- Waiting room entries will be dynamically inserted here -->
+            <p class="text-center text-gray-500" id="loadingMessage">Loading waiting list...</p>
+        </div>
+
+        <!-- NEW: Button to History Page -->
+        <div class="mt-8 text-center">
+            <a href="{% url 'doctor_history' doctor.id %}" class="inline-block bg-gray-700 text-white px-6 py-3 rounded-md font-semibold hover:bg-gray-800 transition duration-200 ease-in-out shadow-md">
+                View Patient History
+            </a>
+        </div>
+
+        <!-- Custom Modal for Alerts/Confirmations -->
+        <div id="customModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center hidden">
+            <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
+                <h3 id="modalTitle" class="text-lg font-bold mb-4"></h3>
+                <p id="modalMessage" class="mb-6"></p>
+                <div class="flex justify-end space-x-3">
+                    <button id="modalCancelBtn" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 transition duration-200 hidden">Cancel</button>
+                    <button id="modalConfirmBtn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition duration-200">OK</button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+{% endblock %}
+
+{% block extra_js %}
+    <script>
+        // The doctorId is passed from the Django view context
+        const doctorId = "{{ doctor.id }}";
+        const doctorNameElement = document.getElementById('doctorName');
+        const waitingListDiv = document.getElementById('waitingList');
+        const loadingMessage = document.getElementById('loadingMessage');
+        const newPatientNameInput = document.getElementById('newPatientName');
+        const addPatientBtn = document.getElementById('addPatientBtn');
+
+        // Modal elements
+        const customModal = document.getElementById('customModal');
+        const modalTitle = document.getElementById('modalTitle');
+        const modalMessage = document.getElementById('modalMessage');
+        const modalConfirmBtn = document.getElementById('modalConfirmBtn');
+        const modalCancelBtn = document.getElementById('modalCancelBtn');
+
+        function showCustomModal(title, message, onConfirm = null, onCancel = null) {
+            modalTitle.textContent = title;
+            modalMessage.textContent = message;
+            customModal.classList.remove('hidden');
+
+            modalConfirmBtn.onclick = () => {
+                customModal.classList.add('hidden');
+                if (onConfirm) onConfirm();
+            };
+
+            if (onCancel) {
+                modalCancelBtn.classList.remove('hidden');
+                modalCancelBtn.onclick = () => {
+                    customModal.classList.add('hidden');
+                    onCancel();
+                };
+            } else {
+                modalCancelBtn.classList.add('hidden');
+            }
+        }
+
+
+        // WebSocket connection
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/waiting_room/${doctorId}/`;
+        const chatSocket = new WebSocket(wsUrl);
+
+        chatSocket.onopen = function(e) {
+            console.log("WebSocket connection opened.");
+            loadingMessage.textContent = "Connected. Waiting for updates...";
+        };
+
+        chatSocket.onmessage = function(e) {
+            const data = JSON.parse(e.data);
+            console.log("Received message:", data);
+
+            if (data.type === 'waiting_list') {
+                updateWaitingListUI(data.data);
+            } else if (data.type === 'error') {
+                showCustomModal('Error', data.message);
+            }
+        };
+
+        chatSocket.onclose = function(e) {
+            console.error('WebSocket closed unexpectedly:', e);
+            loadingMessage.textContent = "Disconnected. Please refresh.";
+            showCustomModal('Disconnected', 'The connection to the waiting room updates has been lost. Please refresh the page.');
+        };
+
+        chatSocket.onerror = function(e) {
+            console.error('WebSocket error:', e);
+            loadingMessage.textContent = "Error connecting. Please refresh.";
+            showCustomModal('Connection Error', 'An error occurred with the WebSocket connection. Please refresh the page.');
+        };
+
+        function updateWaitingListUI(waitingList) {
+            waitingListDiv.innerHTML = ''; // Clear existing list
+            if (waitingList.length === 0) {
+                waitingListDiv.innerHTML = '<p class="text-center text-gray-500">No patients in the waiting room.</p>';
+                return;
+            }
+
+            waitingList.forEach(entry => {
+                const entryCard = document.createElement('div');
+                entryCard.className = 'card p-4 flex flex-col sm:flex-row items-center justify-between space-y-3 sm:space-y-0 sm:space-x-4';
+                entryCard.innerHTML = `
+                    <div class="flex-grow text-center sm:text-left">
+                        <p class="text-xl font-semibold text-gray-900">${entry.patient_name}</p>
+                        <p class="text-sm text-gray-600">Arrived: ${entry.arrived_at}</p>
+                    </div>
+                    <div class="flex flex-wrap justify-center sm:justify-end gap-2">
+                        <button data-id="${entry.id}" data-status="Waiting" class="status-button status-waiting ${entry.status === 'Waiting' ? 'opacity-100' : 'opacity-50'}">Waiting</button>
+                        <button data-id="${entry.id}" data-status="In Progress" class="status-button status-in-progress ${entry.status === 'In Progress' ? 'opacity-100' : 'opacity-50'}">In Progress</button>
+                        <button data-id="${entry.id}" data-status="Done" class="status-button status-done ${entry.status === 'Done' ? 'opacity-100' : 'opacity-50'}">Done</button>
+                        <button data-id="${entry.id}" data-status="Cancelled" data-action="remove" class="status-button status-cancelled ${entry.status === 'Cancelled' ? 'opacity-100' : 'opacity-50'}">Remove</button>
+                    </div>
+                `;
+                waitingListDiv.appendChild(entryCard);
+            });
+
+            // Add event listeners to status buttons
+            document.querySelectorAll('.status-button').forEach(button => {
+                button.onclick = function() {
+                    const entryId = this.dataset.id;
+                    const action = this.dataset.action; // Get the action (status or remove)
+                    const patientName = this.closest('.card').querySelector('p').textContent.split(' for')[0];
+
+                    if (action === 'remove') {
+                        showCustomModal(
+                            'Confirm Removal',
+                            `Are you sure you want to remove patient "${patientName}" from the queue? This action cannot be undone.`,
+                            () => {
+                                chatSocket.send(JSON.stringify({
+                                    'type': 'remove_patient', // New message type for removal
+                                    'entry_id': entryId
+                                }));
+                            },
+                            () => {
+                                console.log("Patient removal cancelled.");
+                            }
+                        );
+                    } else {
+                        const newStatus = this.dataset.status;
+                        showCustomModal(
+                            'Confirm Status Change',
+                            `Are you sure you want to change the status of patient "${patientName}" to "${newStatus}"?`,
+                            () => {
+                                chatSocket.send(JSON.stringify({
+                                    'type': 'update_status',
+                                    'entry_id': entryId,
+                                    'status': newStatus
+                                }));
+                            },
+                            () => {
+                                console.log("Status change cancelled.");
+                            }
+                        );
+                    }
+                };
+            });
+        }
+
+        addPatientBtn.onclick = function() {
+            const patientName = newPatientNameInput.value.trim();
+            if (patientName) {
+                showCustomModal(
+                    'Add Patient',
+                    `Add "${patientName}" to the waiting room?`,
+                    () => {
+                        chatSocket.send(JSON.stringify({
+                            'type': 'add_patient',
+                            'patient_name': patientName
+                        }));
+                        newPatientNameInput.value = ''; // Clear input after sending
+                    },
+                    () => {
+                        console.log("Add patient cancelled.");
+                    }
+                );
+            } else {
+                showCustomModal('Input Required', 'Please enter a patient name.');
+            }
+        };
+
+    </script>
+{% endblock %}

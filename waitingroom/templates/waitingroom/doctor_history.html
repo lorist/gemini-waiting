@@ -1,0 +1,49 @@
+{# waitingroom/templates/waitingroom/doctor_history.html #}
+{% extends 'base.html' %}
+
+{% block title %}Dr. {{ doctor.name }}'s Patient History - My App{% endblock %}
+
+{% block content %}
+    <div class="container mx-auto p-6 card">
+        <h1 class="text-3xl font-bold text-gray-800 mb-6 text-center">Dr. {{ doctor.name }}'s Patient History</h1>
+
+        <div class="mb-6 text-center">
+            <a href="{% url 'doctor_dashboard' doctor.id %}" class="inline-block bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 transition duration-200 ease-in-out shadow-md">
+                &larr; Back to Active Queue
+            </a>
+        </div>
+
+        {% if historical_entries %}
+            <div class="overflow-x-auto">
+                <table class="min-w-full bg-white rounded-lg shadow-md overflow-hidden">
+                    <thead class="bg-gray-200 text-gray-700 uppercase text-sm leading-normal">
+                        <tr>
+                            <th class="py-3 px-6 text-left">Patient Name</th>
+                            <th class="py-3 px-6 text-left">Status</th>
+                            <th class="py-3 px-6 text-left">Arrived At</th>
+                        </tr>
+                    </thead>
+                    <tbody class="text-gray-600 text-sm font-light">
+                        {% for entry in historical_entries %}
+                            <tr class="border-b border-gray-200 hover:bg-gray-100">
+                                <td class="py-3 px-6 text-left whitespace-nowrap">{{ entry.patient.name }}</td>
+                                <td class="py-3 px-6 text-left">
+                                    <span class="py-1 px-3 rounded-full text-xs font-semibold
+                                        {% if entry.status == 'Done' %} bg-green-200 text-green-800
+                                        {% elif entry.status == 'Cancelled' %} bg-red-200 text-red-800
+                                        {% else %} bg-gray-200 text-gray-800
+                                        {% endif %}">
+                                        {{ entry.status }}
+                                    </span>
+                                </td>
+                                <td class="py-3 px-6 text-left">{{ entry.arrived_at|date:"M d, Y H:i" }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <p class="text-center text-gray-500 mt-8">No historical patient entries found for Dr. {{ doctor.name }}.</p>
+        {% endif %}
+    </div>
+{% endblock %}
