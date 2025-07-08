@@ -36,6 +36,11 @@
             </div>
         </div>
 
+        <!-- Toast Notification -->
+        <div id="toastNotification" class="fixed bottom-4 right-4 bg-gray-800 text-white px-4 py-2 rounded-md shadow-lg hidden">
+            Link copied to clipboard!
+        </div>
+
     </div>
 {% endblock %}
 
@@ -59,6 +64,9 @@
         const modalConfirmBtn = document.getElementById('modalConfirmBtn');
         const modalCancelBtn = document.getElementById('modalCancelBtn');
 
+        // Toast Notification element
+        const toastNotification = document.getElementById('toastNotification');
+
         function showCustomModal(title, message, onConfirm = null, onCancel = null) {
             modalTitle.textContent = title;
             modalMessage.textContent = message;
@@ -80,6 +88,13 @@
             }
         }
 
+        function showToast(message) {
+            toastNotification.textContent = message;
+            toastNotification.classList.remove('hidden');
+            setTimeout(() => {
+                toastNotification.classList.add('hidden');
+            }, 3000); // Hide after 3 seconds
+        }
 
         // WebSocket connection
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -88,9 +103,7 @@
 
         chatSocket.onopen = function(e) {
             console.log("WebSocket connection opened.");
-            // In a real app, you might fetch doctor details via an AJAX call
-            // For this example, we'll just set a placeholder name.
-            doctorNameElement.textContent = `Doctor {{ doctor.name }}`; // Use Django context for doctor name
+            doctorNameElement.textContent = `Doctor {{ doctor.name }}`;
             loadingMessage.textContent = "Connected. Waiting for updates...";
         };
 
@@ -145,6 +158,12 @@
                                 Connect
                             </button>
                         ` : ''}
+                        <button class="copy-link-button bg-gray-500 text-white px-4 py-2 rounded-md font-semibold hover:bg-gray-600 transition duration-200 ease-in-out shadow-md"
+                                data-patient-uuid="${entry.patient_uuid}"
+                                data-patient-name="${entry.patient_name}"
+                                data-guest-pin="${entry.guest_pin}">
+                            Copy Patient Link
+                        </button>
                     </div>
                 `;
                 waitingListDiv.appendChild(entryCard);
@@ -155,7 +174,10 @@
                 button.onclick = function() {
                     const entryId = this.dataset.id;
                     const action = this.dataset.action;
-                    const patientName = this.closest('.card').querySelector('p').textContent.split(' for')[0];
+                    // Get patient name from the closest parent element that contains it
+                    const patientNameElement = this.closest('.card').querySelector('.text-xl.font-semibold');
+                    const patientName = patientNameElement ? patientNameElement.textContent : 'Unknown Patient';
+
 
                     if (action === 'remove') {
                         showCustomModal(
@@ -191,7 +213,7 @@
                 };
             });
 
-            // NEW: Add event listeners for connect buttons
+            // Add event listeners for connect buttons
             document.querySelectorAll('.connect-button').forEach(button => {
                 button.onclick = function() {
                     const patientUuid = this.dataset.patientUuid;
@@ -202,8 +224,6 @@
                         'Connect to Patient',
                         `Connect to ${patientName}'s virtual room?`,
                         () => {
-                            // Construct Pexip URL for the doctor
-                            // Doctor joins using patient's UUID as conference alias and host_pin
                             const pexipUrl = `https://${PEXIP_ADDRESS}/${PEXIP_PATH}/m/?conference=${patientUuid}&name=${encodeURIComponent(`Dr. ${doctorNameElement.textContent}`)}&role=host&pin=${hostPin}`;
                             window.open(pexipUrl, '_blank');
                         },
@@ -213,6 +233,28 @@
                         'Connect',
                         'Cancel'
                     );
+                };
+            });
+
+            // NEW: Add event listeners for copy link buttons
+            document.querySelectorAll('.copy-link-button').forEach(button => {
+                button.onclick = function() {
+                    const patientUuid = this.dataset.patientUuid;
+                    const patientName = this.dataset.patientName;
+                    const guestPin = this.dataset.guestPin;
+
+                    // Construct the patient join link
+                    const patientJoinLink = `https://${PEXIP_ADDRESS}/${PEXIP_PATH}/m/?conference=${patientUuid}&name=${encodeURIComponent(patientName)}&role=guest&pin=${guestPin}`;
+
+                    // Create a temporary textarea to copy the text
+                    const tempTextArea = document.createElement('textarea');
+                    tempTextArea.value = patientJoinLink;
+                    document.body.appendChild(tempTextArea);
+                    tempTextArea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(tempTextArea);
+
+                    showToast('Patient join link copied to clipboard!');
                 };
             });
         }
