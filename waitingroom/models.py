@@ -20,9 +20,11 @@ class WaitingRoomEntry(models.Model):
     arrived_at = models.DateTimeField(auto_now_add=True)
     host_pin = models.CharField(max_length=6, unique=True, null=True, blank=True) # 6-digit PIN for doctor
     guest_pin = models.CharField(max_length=6, unique=True, null=True, blank=True) # 6-digit PIN for patient
+    added_by_doctor = models.BooleanField(default=False) # NEW: Flag to indicate if added by doctor
 
     class Meta:
         ordering = ['arrived_at']
 
     def __str__(self):
         return f"{self.patient.name} for Dr. {self.doctor.name} - {self.status}"
+
