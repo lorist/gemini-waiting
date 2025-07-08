@@ -158,12 +158,14 @@
                                 Connect
                             </button>
                         ` : ''}
-                        <button class="copy-link-button bg-gray-500 text-white px-4 py-2 rounded-md font-semibold hover:bg-gray-600 transition duration-200 ease-in-out shadow-md"
-                                data-patient-uuid="${entry.patient_uuid}"
-                                data-patient-name="${entry.patient_name}"
-                                data-guest-pin="${entry.guest_pin}">
-                            Copy Patient Link
-                        </button>
+                        ${entry.added_by_doctor ? ` {# Conditionally render based on added_by_doctor flag #}
+                            <button class="copy-link-button bg-gray-500 text-white px-4 py-2 rounded-md font-semibold hover:bg-gray-600 transition duration-200 ease-in-out shadow-md"
+                                    data-patient-uuid="${entry.patient_uuid}"
+                                    data-patient-name="${entry.patient_name}"
+                                    data-guest-pin="${entry.guest_pin}"> {# Corrected: Use entry.guest_pin directly #}
+                                Copy Patient Link
+                            </button>
+                        ` : ''}
                     </div>
                 `;
                 waitingListDiv.appendChild(entryCard);
@@ -174,10 +176,8 @@
                 button.onclick = function() {
                     const entryId = this.dataset.id;
                     const action = this.dataset.action;
-                    // Get patient name from the closest parent element that contains it
                     const patientNameElement = this.closest('.card').querySelector('.text-xl.font-semibold');
                     const patientName = patientNameElement ? patientNameElement.textContent : 'Unknown Patient';
-
 
                     if (action === 'remove') {
                         showCustomModal(
@@ -236,17 +236,16 @@
                 };
             });
 
-            // NEW: Add event listeners for copy link buttons
+            // Add event listeners for copy link buttons
             document.querySelectorAll('.copy-link-button').forEach(button => {
                 button.onclick = function() {
                     const patientUuid = this.dataset.patientUuid;
                     const patientName = this.dataset.patientName;
-                    const guestPin = this.dataset.guestPin;
+                    const guestPin = this.dataset.guestPin; // FIXED: Changed from guest_pin to guestPin
 
-                    // Construct the patient join link
+                    // MODIFIED: Use Pexip format for patientJoinLink
                     const patientJoinLink = `https://${PEXIP_ADDRESS}/${PEXIP_PATH}/m/?conference=${patientUuid}&name=${encodeURIComponent(patientName)}&role=guest&pin=${guestPin}`;
 
-                    // Create a temporary textarea to copy the text
                     const tempTextArea = document.createElement('textarea');
                     tempTextArea.value = patientJoinLink;
                     document.body.appendChild(tempTextArea);

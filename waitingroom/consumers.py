@@ -46,7 +46,6 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
         elif message_type == 'add_patient':
             patient_name = text_data_json.get('patient_name')
             patient_uuid = text_data_json.get('patient_uuid')
-            # This call is already correctly awaited in the receive method
             await self.add_patient_to_waiting_room(patient_name, patient_uuid)
             await self.channel_layer.group_send(
                 self.doctor_group_name,
@@ -115,6 +114,7 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
                     'doctor_id': entry.doctor.id,
                     'host_pin': entry.host_pin,
                     'guest_pin': entry.guest_pin,
+                    'added_by_doctor': entry.added_by_doctor, # Include the flag
                 })
             return data
         except Doctor.DoesNotExist:
@@ -143,12 +143,13 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             print(f"Error updating status for entry {entry_id}: {e}")
 
-    # Removed @sync_to_async from here
     async def add_patient_to_waiting_room(self, patient_name, patient_uuid):
         try:
-            # All database operations inside this async function must be awaited with sync_to_async
             doctor = await sync_to_async(Doctor.objects.get)(id=self.doctor_id)
+            is_added_by_doctor = False # Default to False
+
             if patient_uuid:
+                # Patient joined from their own page, UUID provided
                 patient, created = await sync_to_async(Patient.objects.get_or_create)(
                     uuid=uuid.UUID(patient_uuid),
                     defaults={'name': patient_name}
@@ -157,9 +158,14 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
                     patient.name = patient_name
                     await sync_to_async(patient.save)()
             else:
+                # Patient added by doctor from dashboard, UUID needs to be generated
                 patient, created = await sync_to_async(Patient.objects.get_or_create)(name=patient_name)
+                # If a new patient is created by the doctor, assign a UUID
+                if created:
+                    patient.uuid = uuid.uuid4()
+                    await sync_to_async(patient.save)()
+                is_added_by_doctor = True # Set flag to True if added by doctor
 
-            # Check if patient is already in an active queue for this doctor
             if not await sync_to_async(WaitingRoomEntry.objects.filter(
                 doctor=doctor, patient=patient, status__in=['Waiting', 'In Progress']
             ).exists)():
@@ -170,9 +176,10 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
                     patient=patient,
                     status='Waiting',
                     host_pin=host_pin,
-                    guest_pin=guest_pin
+                    guest_pin=guest_pin,
+                    added_by_doctor=is_added_by_doctor, # Assign the flag
                 )
-                print(f"Added patient {patient_name} (UUID: {patient.uuid}) to waiting room for doctor {self.doctor_id} with Host PIN: {host_pin}, Guest PIN: {guest_pin}")
+                print(f"Added patient {patient_name} (UUID: {patient.uuid}) to waiting room for doctor {self.doctor_id} with Host PIN: {host_pin}, Guest PIN: {guest_pin}. Added by doctor: {is_added_by_doctor}")
             else:
                 print(f"Patient {patient_name} (UUID: {patient.uuid}) is already in the active queue for doctor {self.doctor_id}.")
 
@@ -202,4 +209,3 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
             print(f"Purged {deleted_count} historical entries for doctor {self.doctor_id}.")
         except Exception as e:
             print(f"Error purging history for doctor {self.doctor_id}: {e}")
-
