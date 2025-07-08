@@ -158,11 +158,11 @@
                                 Connect
                             </button>
                         ` : ''}
-                        ${entry.added_by_doctor ? ` {# Conditionally render based on added_by_doctor flag #}
+                        ${entry.added_by_doctor && entry.status === 'In Progress' ? ` {# Conditionally render based on added_by_doctor AND In Progress status #}
                             <button class="copy-link-button bg-gray-500 text-white px-4 py-2 rounded-md font-semibold hover:bg-gray-600 transition duration-200 ease-in-out shadow-md"
                                     data-patient-uuid="${entry.patient_uuid}"
                                     data-patient-name="${entry.patient_name}"
-                                    data-guest-pin="${entry.guest_pin}"> {# Corrected: Use entry.guest_pin directly #}
+                                    data-guest-pin="${entry.guest_pin}">
                                 Copy Patient Link
                             </button>
                         ` : ''}
@@ -241,9 +241,8 @@
                 button.onclick = function() {
                     const patientUuid = this.dataset.patientUuid;
                     const patientName = this.dataset.patientName;
-                    const guestPin = this.dataset.guestPin; // FIXED: Changed from guest_pin to guestPin
+                    const guestPin = this.dataset.guestPin;
 
-                    // MODIFIED: Use Pexip format for patientJoinLink
                     const patientJoinLink = `https://${PEXIP_ADDRESS}/${PEXIP_PATH}/m/?conference=${patientUuid}&name=${encodeURIComponent(patientName)}&role=guest&pin=${guestPin}`;
 
                     const tempTextArea = document.createElement('textarea');
