@@ -149,16 +149,17 @@
                         ${entry.guest_pin ? `<p class="text-sm text-gray-700">Guest PIN: <span class="font-bold">${entry.guest_pin}</span></p>` : ''}
                     </div>
                     <div class="flex flex-wrap justify-center sm:justify-end gap-2">
-                        <button data-id="${entry.id}" data-status="Waiting" class="status-button status-waiting ${entry.status === 'Waiting' ? 'opacity-100' : 'opacity-50'}">Waiting</button>
-                        <button data-id="${entry.id}" data-status="In Progress" class="status-button status-in-progress ${entry.status === 'In Progress' ? 'opacity-100' : 'opacity-50'}">In Progress</button>
-                        <button data-id="${entry.id}" data-status="Done" class="status-button status-done ${entry.status === 'Done' ? 'opacity-100' : 'opacity-50'}">Done</button>
-                        <button data-id="${entry.id}" data-status="Cancelled" data-action="remove" class="status-button status-cancelled ${entry.status === 'Cancelled' ? 'opacity-100' : 'opacity-50'}">Remove</button>
-                        ${entry.status === 'In Progress' ? `
+                        <button data-id="${entry.id}" data-status="Waiting" class="status-interactive-button status-waiting ${entry.status === 'Waiting' ? 'opacity-100' : 'opacity-50'}">Waiting</button>
+                        <button data-id="${entry.id}" data-status="In Progress" class="status-interactive-button status-in-progress ${entry.status === 'In Progress' ? 'opacity-100' : 'opacity-50'}">In Progress</button>
+                        <span class="status-display status-in-call ${entry.status === 'In Call' ? 'opacity-100' : 'opacity-50'}">In Call</span> {# Changed to span, no data-id/status #}
+                        <button data-id="${entry.id}" data-status="Done" class="status-interactive-button status-done ${entry.status === 'Done' ? 'opacity-100' : 'opacity-50'}">Done</button>
+                        <button data-id="${entry.id}" data-status="Cancelled" data-action="remove" class="status-interactive-button status-cancelled ${entry.status === 'Cancelled' ? 'opacity-100' : 'opacity-50'}">Remove</button>
+                        ${entry.status === 'In Progress' || entry.status === 'In Call' ? ` {# Show connect button if In Progress or In Call #}
                             <button data-patient-uuid="${entry.patient_uuid}" data-host-pin="${entry.host_pin}" data-patient-name="${entry.patient_name}" class="connect-button bg-purple-600 text-white px-4 py-2 rounded-md font-semibold hover:bg-purple-700 transition duration-200 ease-in-out shadow-md">
                                 Connect
                             </button>
                         ` : ''}
-                        ${entry.added_by_doctor && entry.status === 'In Progress' ? ` {# Conditionally render based on added_by_doctor AND In Progress status #}
+                        ${entry.added_by_doctor && (entry.status === 'In Progress' || entry.status === 'In Call') ? ` {# Conditionally render based on added_by_doctor AND In Progress/In Call status #}
                             <button class="copy-link-button bg-gray-500 text-white px-4 py-2 rounded-md font-semibold hover:bg-gray-600 transition duration-200 ease-in-out shadow-md"
                                     data-patient-uuid="${entry.patient_uuid}"
                                     data-patient-name="${entry.patient_name}"
@@ -171,8 +172,8 @@
                 waitingListDiv.appendChild(entryCard);
             });
 
-            // Add event listeners to status buttons
-            document.querySelectorAll('.status-button').forEach(button => {
+            // Add event listeners to status buttons (now targeting status-interactive-button)
+            document.querySelectorAll('.status-interactive-button').forEach(button => {
                 button.onclick = function() {
                     const entryId = this.dataset.id;
                     const action = this.dataset.action;

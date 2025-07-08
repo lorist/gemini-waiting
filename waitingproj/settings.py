@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'channels',
     'waitingroom',
     'pexip_policy',
+    'pexip_events',
 ]
 
 ASGI_APPLICATION = 'waitingproj.asgi.application'

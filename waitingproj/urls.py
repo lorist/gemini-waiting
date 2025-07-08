@@ -9,4 +9,5 @@ urlpatterns = [
     # so they will be directly accessible (e.g., /join-queue/, /doctor/1/).
     path('', include('waitingroom.urls')),
     path('policy/v1/', include('pexip_policy.urls')),
+    path('pexip/', include('pexip_events.urls')), # /pexip/events/
 ]

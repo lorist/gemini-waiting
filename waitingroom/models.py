@@ -14,13 +14,23 @@ class Patient(models.Model):
         return self.name
 
 class WaitingRoomEntry(models.Model):
+    # Define choices for status for better data integrity and clarity
+    STATUS_CHOICES = [
+        ('Waiting', 'Waiting'),
+        ('In Progress', 'In Progress'),
+        ('In Call', 'In Call'), # NEW: Status when patient is actively in the Pexip call
+        ('Left Call', 'Left Call'), # NEW: Status when patient leaves the Pexip call
+        ('Done', 'Done'),
+        ('Cancelled', 'Cancelled'),
+    ]
+
     doctor = models.ForeignKey(Doctor, on_delete=models.CASCADE, related_name='waiting_patients')
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE)
-    status = models.CharField(max_length=50, default='Waiting') # e.g., 'Waiting', 'In Progress', 'Done', 'Cancelled'
+    status = models.CharField(max_length=50, choices=STATUS_CHOICES, default='Waiting') # Use choices
     arrived_at = models.DateTimeField(auto_now_add=True)
-    host_pin = models.CharField(max_length=6, unique=True, null=True, blank=True) # 6-digit PIN for doctor
-    guest_pin = models.CharField(max_length=6, unique=True, null=True, blank=True) # 6-digit PIN for patient
-    added_by_doctor = models.BooleanField(default=False) # NEW: Flag to indicate if added by doctor
+    host_pin = models.CharField(max_length=6, unique=True, null=True, blank=True)
+    guest_pin = models.CharField(max_length=6, unique=True, null=True, blank=True)
+    added_by_doctor = models.BooleanField(default=False)
 
     class Meta:
         ordering = ['arrived_at']

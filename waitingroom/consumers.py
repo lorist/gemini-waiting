@@ -4,7 +4,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from asgiref.sync import sync_to_async
 from .models import WaitingRoomEntry, Doctor, Patient
 import uuid
-import random # Import random for PIN generation
+import random
 
 class WaitingRoomConsumer(AsyncWebsocketConsumer):
     async def connect(self):
@@ -101,7 +101,7 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
             waiting_entries = WaitingRoomEntry.objects.filter(
                 doctor=doctor
             ).exclude(
-                status__in=['Done', 'Cancelled']
+                status__in=['Done', 'Cancelled', 'Left Call'] # NEW: Exclude 'Left Call' from active list
             ).select_related('patient').order_by('arrived_at')
             data = []
             for entry in waiting_entries:
@@ -114,7 +114,7 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
                     'doctor_id': entry.doctor.id,
                     'host_pin': entry.host_pin,
                     'guest_pin': entry.guest_pin,
-                    'added_by_doctor': entry.added_by_doctor, # Include the flag
+                    'added_by_doctor': entry.added_by_doctor,
                 })
             return data
         except Doctor.DoesNotExist:
@@ -146,10 +146,9 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
     async def add_patient_to_waiting_room(self, patient_name, patient_uuid):
         try:
             doctor = await sync_to_async(Doctor.objects.get)(id=self.doctor_id)
-            is_added_by_doctor = False # Default to False
+            is_added_by_doctor = False
 
             if patient_uuid:
-                # Patient joined from their own page, UUID provided
                 patient, created = await sync_to_async(Patient.objects.get_or_create)(
                     uuid=uuid.UUID(patient_uuid),
                     defaults={'name': patient_name}
@@ -158,16 +157,14 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
                     patient.name = patient_name
                     await sync_to_async(patient.save)()
             else:
-                # Patient added by doctor from dashboard, UUID needs to be generated
                 patient, created = await sync_to_async(Patient.objects.get_or_create)(name=patient_name)
-                # If a new patient is created by the doctor, assign a UUID
                 if created:
                     patient.uuid = uuid.uuid4()
                     await sync_to_async(patient.save)()
-                is_added_by_doctor = True # Set flag to True if added by doctor
+                is_added_by_doctor = True
 
             if not await sync_to_async(WaitingRoomEntry.objects.filter(
-                doctor=doctor, patient=patient, status__in=['Waiting', 'In Progress']
+                doctor=doctor, patient=patient, status__in=['Waiting', 'In Progress', 'In Call'] # NEW: Also check 'In Call'
             ).exists)():
                 host_pin = await self._generate_unique_pin()
                 guest_pin = await self._generate_unique_pin()
@@ -177,7 +174,7 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
                     status='Waiting',
                     host_pin=host_pin,
                     guest_pin=guest_pin,
-                    added_by_doctor=is_added_by_doctor, # Assign the flag
+                    added_by_doctor=is_added_by_doctor,
                 )
                 print(f"Added patient {patient_name} (UUID: {patient.uuid}) to waiting room for doctor {self.doctor_id} with Host PIN: {host_pin}, Guest PIN: {guest_pin}. Added by doctor: {is_added_by_doctor}")
             else:
@@ -204,7 +201,7 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
         try:
             deleted_count, _ = WaitingRoomEntry.objects.filter(
                 doctor_id=self.doctor_id,
-                status__in=['Done', 'Cancelled']
+                status__in=['Done', 'Cancelled', 'Left Call'] # NEW: Include 'Left Call' in history purge
             ).delete()
             print(f"Purged {deleted_count} historical entries for doctor {self.doctor_id}.")
         except Exception as e:

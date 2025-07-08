@@ -41,7 +41,7 @@
             </div>
             <p class="text-sm text-gray-600 mt-4 text-center" id="statusMessage">Waiting for updates...</p>
             <p class="text-xs text-gray-400 mt-2 text-center">Your ID: <span id="myPatientUuid"></span></p>
-            <p class="text-xs text-gray-400 mt-2 text-center" id="myGuestPinDisplay">Guest PIN: <span class="font-bold"></span></p>
+            <p class="text-sm text-gray-600 mt-2 text-center" id="myGuestPinDisplay">Guest PIN: <span class="font-bold"></span></p>
         </div>
 
         <!-- Custom Modal for Alerts/Confirmations (reused for Pexip prompt) -->
@@ -172,15 +172,16 @@
             if (status === 'Waiting') {
                 myStatusSpan.classList.add('bg-yellow-300', 'text-yellow-800');
                 statusMessageP.textContent = `You are currently waiting in the queue.`;
+                myGuestPinDisplay.classList.add('hidden'); // Hide guest PIN
             } else if (status === 'In Progress') {
                 myStatusSpan.classList.add('bg-blue-300', 'text-blue-800');
                 myGuestPinDisplay.querySelector('span').textContent = currentGuestPin;
-                myGuestPinDisplay.classList.remove('hidden');
+                myGuestPinDisplay.classList.remove('hidden'); // Show guest PIN
                 statusMessageP.textContent = `You are currently being seen by the doctor. Please join the call.`;
 
                 showCustomModal(
                     'Join Doctor\'s Room',
-                    `Your appointment is now in progress. Would you like to join the doctor\'s virtual room?`,
+                    `Your appointment is now in progress. Please use the Host PIN: <span class="font-bold text-blue-700">${currentHostPin}</span> and Guest PIN: <span class="font-bold text-blue-700">${currentGuestPin}</span>. Would you like to join the doctor\'s virtual room?`,
                     () => {
                         const pexipUrl = `https://${PEXIP_ADDRESS}/${PEXIP_PATH}/m/?conference=${currentPatientUuid}&name=${encodeURIComponent(currentPatientName)}&role=guest&pin=${currentGuestPin}`;
                         window.open(pexipUrl, '_blank');
@@ -192,8 +193,14 @@
                     'Join Call',
                     'Later'
                 );
-
-            } else if (status === 'Done') {
+            } else if (status === 'In Call') { // NEW: Handle 'In Call' status
+                myStatusSpan.classList.add('bg-green-500', 'text-white');
+                myGuestPinDisplay.querySelector('span').textContent = currentGuestPin;
+                myGuestPinDisplay.classList.remove('hidden');
+                statusMessageP.textContent = `You are currently in the call with Dr. ${currentDoctorName}.`;
+                // No modal here, as they are already in the call
+            }
+            else if (status === 'Done') {
                 myStatusSpan.classList.add('bg-green-300', 'text-green-800');
                 statusMessageP.textContent = `Your appointment is complete.`;
                 myGuestPinDisplay.classList.add('hidden');
@@ -206,13 +213,13 @@
                         window.location.href = '/join-queue/';
                     }
                 );
-            } else if (status === 'Cancelled') {
+            } else if (status === 'Cancelled' || status === 'Left Call') { // NEW: Handle 'Left Call' status
                 myStatusSpan.classList.add('bg-red-300', 'text-red-800');
-                statusMessageP.textContent = `Your appointment has been cancelled.`;
+                statusMessageP.textContent = `Your appointment has ended or been cancelled.`;
                 myGuestPinDisplay.classList.add('hidden');
                 showCustomModal(
-                    'Appointment Cancelled',
-                    'Your appointment has been cancelled. You will now be redirected to the join page.',
+                    'Appointment Ended',
+                    'Your appointment has ended or been cancelled. You will now be redirected to the join page.',
                     () => {
                         if (patientSocket) patientSocket.close();
                         clearPatientData();
@@ -264,9 +271,10 @@
                         currentHostPin = myEntry.host_pin;
                         updatePatientStatusUI(myEntry.status);
                     } else {
+                        // If patient entry is no longer in the active list (e.g., Done, Cancelled, Left Call)
                         if (hasJoinedConfirmed) {
-                            if (myStatusSpan.textContent === 'Waiting' || myStatusSpan.textContent === 'In Progress') {
-                                updatePatientStatusUI('Done');
+                            if (myStatusSpan.textContent === 'Waiting' || myStatusSpan.textContent === 'In Progress' || myStatusSpan.textContent === 'In Call') {
+                                updatePatientStatusUI('Done'); // Default to Done if entry not found
                             }
                         }
                     }
@@ -278,7 +286,7 @@
             patientSocket.onclose = function(e) {
                 console.error('Patient WebSocket closed unexpectedly:', e);
                 statusMessageP.textContent = "Disconnected from updates. Please refresh.";
-                if (myStatusSpan.textContent !== 'Done' && myStatusSpan.textContent !== 'Cancelled') {
+                if (myStatusSpan.textContent !== 'Done' && myStatusSpan.textContent !== 'Cancelled' && myStatusSpan.textContent !== 'Left Call') {
                     showCustomModal('Disconnected', 'The connection to the waiting room updates has been lost. Please refresh the page.');
                 }
             };
