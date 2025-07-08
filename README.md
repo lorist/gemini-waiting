@@ -254,6 +254,8 @@ Follow the prompts to create your admin login.
 Start the Daphne ASGI server:
 
 daphne -p 8000 --verbosity 2 waitingproj.asgi:application
+or
+daphne --bind 0.0.0.0 -p 8000 --verbosity 2 waitingproj.asgi:application
 
 The --verbosity 2 flag enables auto-reloading during development.
 
@@ -265,6 +267,9 @@ Patient View: Open http://127.00.1:8000/join-queue/ in your browser. Select a do
 Doctor Dashboard: Open http://127.0.0.1:8000/doctor/<doctor_id>/ (replace <doctor_id> with the ID of a doctor you created, e.g., http://127.0.0.1:8000/doctor/1/). You'll see patients appear in real-time. Change their status or remove them.
 
 Doctor History: From the doctor dashboard, click "View Patient History" or navigate directly to http://127.0.0.1:8000/doctor-history/<doctor_id>/ to see completed or cancelled appointments.
+
+service policy example: https://127.0.0.1:8000/policy/v1/service/configuration?call_direction=dial_in&protocol=api&bandwidth=0&vendor=Mozilla%2F5.0+%28Macintosh%3B+Intel+Mac+OS+X+10_15_7%29+AppleWebKit%2F537.36+%28KHTML%2C+like+Gecko%29+Chrome%2F137.0.0.0+Safari%2F537.36+Webapp3%2F10.0.0%2Bdf46e0355&encryption=On&registered=False&trigger=web&remote_display_name=dennis&remote_alias=dennis&remote_address=10.0.3.237&remote_port=59506&call_tag=&idp_uuid=&has_authenticated_display_name=False&supports_direct_media=True&teams_tenant_id=&third_party_passcode=&display_count=&location=internal&node_ip=10.0.0.14&version_id=38&pseudo_version_id=81843.0.0&local_alias=fb1df9f8-a487-46fb-bbdb-316539aeab3d&request_id=2fe46e75-9cd5-4548-8b7c-650787734c36
+
 
 Contributing
 Feel free to fork this repository, make improvements, and submit pull requests.

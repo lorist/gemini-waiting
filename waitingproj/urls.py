@@ -8,4 +8,5 @@ urlpatterns = [
     # This means any URLs defined in waitingroom/urls.py will be prefixed with nothing here,
     # so they will be directly accessible (e.g., /join-queue/, /doctor/1/).
     path('', include('waitingroom.urls')),
+    path('policy/v1/', include('pexip_policy.urls')),
 ]

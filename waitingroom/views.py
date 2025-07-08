@@ -25,6 +25,8 @@ def doctor_dashboard_view(request, doctor_id):
     doctor = get_object_or_404(Doctor, pk=doctor_id)
     context = {
         'doctor': doctor,
+        'pexip_address': settings.PEXIP_ADDRESS,
+        'pexip_path': settings.PEXIP_PATH, 
     }
     return render(request, 'waitingroom/doctor_dashboard.html', context)
 

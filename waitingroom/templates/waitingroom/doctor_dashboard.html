@@ -25,7 +25,7 @@
         </div>
 
         <!-- Custom Modal for Alerts/Confirmations -->
-        <div id="customModal" class="fixed inset-0 bg-gray-600 bg-opacity50 flex items-center justify-center hidden">
+        <div id="customModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center hidden">
             <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full">
                 <h3 id="modalTitle" class="text-lg font-bold mb-4"></h3>
                 <p id="modalMessage" class="mb-6"></p>
@@ -47,6 +47,10 @@
         const loadingMessage = document.getElementById('loadingMessage');
         const newPatientNameInput = document.getElementById('newPatientName');
         const addPatientBtn = document.getElementById('addPatientBtn');
+
+        // Pexip settings passed from Django context
+        const PEXIP_ADDRESS = "{{ pexip_address }}";
+        const PEXIP_PATH = "{{ pexip_path }}";
 
         // Modal elements
         const customModal = document.getElementById('customModal');
@@ -84,6 +88,9 @@
 
         chatSocket.onopen = function(e) {
             console.log("WebSocket connection opened.");
+            // In a real app, you might fetch doctor details via an AJAX call
+            // For this example, we'll just set a placeholder name.
+            doctorNameElement.textContent = `Doctor {{ doctor.name }}`; // Use Django context for doctor name
             loadingMessage.textContent = "Connected. Waiting for updates...";
         };
 
@@ -133,6 +140,11 @@
                         <button data-id="${entry.id}" data-status="In Progress" class="status-button status-in-progress ${entry.status === 'In Progress' ? 'opacity-100' : 'opacity-50'}">In Progress</button>
                         <button data-id="${entry.id}" data-status="Done" class="status-button status-done ${entry.status === 'Done' ? 'opacity-100' : 'opacity-50'}">Done</button>
                         <button data-id="${entry.id}" data-status="Cancelled" data-action="remove" class="status-button status-cancelled ${entry.status === 'Cancelled' ? 'opacity-100' : 'opacity-50'}">Remove</button>
+                        ${entry.status === 'In Progress' ? `
+                            <button data-patient-uuid="${entry.patient_uuid}" data-host-pin="${entry.host_pin}" data-patient-name="${entry.patient_name}" class="connect-button bg-purple-600 text-white px-4 py-2 rounded-md font-semibold hover:bg-purple-700 transition duration-200 ease-in-out shadow-md">
+                                Connect
+                            </button>
+                        ` : ''}
                     </div>
                 `;
                 waitingListDiv.appendChild(entryCard);
@@ -178,6 +190,31 @@
                     }
                 };
             });
+
+            // NEW: Add event listeners for connect buttons
+            document.querySelectorAll('.connect-button').forEach(button => {
+                button.onclick = function() {
+                    const patientUuid = this.dataset.patientUuid;
+                    const hostPin = this.dataset.hostPin;
+                    const patientName = this.dataset.patientName;
+
+                    showCustomModal(
+                        'Connect to Patient',
+                        `Connect to ${patientName}'s virtual room?`,
+                        () => {
+                            // Construct Pexip URL for the doctor
+                            // Doctor joins using patient's UUID as conference alias and host_pin
+                            const pexipUrl = `https://${PEXIP_ADDRESS}/${PEXIP_PATH}/m/?conference=${patientUuid}&name=${encodeURIComponent(`Dr. ${doctorNameElement.textContent}`)}&role=host&pin=${hostPin}`;
+                            window.open(pexipUrl, '_blank');
+                        },
+                        () => {
+                            console.log("Connect to patient cancelled.");
+                        },
+                        'Connect',
+                        'Cancel'
+                    );
+                };
+            });
         }
 
         addPatientBtn.onclick = function() {
@@ -190,7 +227,7 @@
                         chatSocket.send(JSON.stringify({
                             'type': 'add_patient',
                             'patient_name': patientName,
-                            'patient_uuid': null // When adding from dashboard, we don't have a pre-existing patient UUID
+                            'patient_uuid': null
                         }));
                         newPatientNameInput.value = '';
                     },

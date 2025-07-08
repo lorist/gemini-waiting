@@ -25,7 +25,7 @@ SECRET_KEY = 'django-insecure--%rgp-yy=w&6vb03s_$8t-2r!jo4egqzich+*oue62ayeq3*od
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['10.0.3.237']
 
 
 # Application definition
@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'channels',
     'waitingroom',
+    'pexip_policy',
 ]
 
 ASGI_APPLICATION = 'waitingproj.asgi.application'
