@@ -5,6 +5,9 @@ from asgiref.sync import sync_to_async
 from .models import WaitingRoomEntry, Doctor, Patient
 import uuid
 import random
+import logging
+
+logger = logging.getLogger(__name__)
 
 class WaitingRoomConsumer(AsyncWebsocketConsumer):
     async def connect(self):
@@ -17,7 +20,7 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
         )
 
         await self.accept()
-        print(f"WebSocket connected for doctor {self.doctor_id}")
+        logger.info(f"[Consumer] WebSocket connected for doctor {self.doctor_id}")
 
         await self.send_waiting_list()
 
@@ -26,11 +29,12 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
             self.doctor_group_name,
             self.channel_name
         )
-        print(f"WebSocket disconnected for doctor {self.doctor_id} with code {close_code}")
+        logger.info(f"[Consumer] WebSocket disconnected for doctor {self.doctor_id} with code {close_code}")
 
     async def receive(self, text_data):
         text_data_json = json.loads(text_data)
         message_type = text_data_json.get('type')
+        logger.info(f"[Consumer] Received message from client: Type={message_type}")
 
         if message_type == 'update_status':
             entry_id = text_data_json.get('entry_id')
@@ -83,6 +87,8 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
 
 
     async def waiting_list_update(self, event):
+        # This method is called when a message is sent to the doctor's group
+        logger.info(f"[Consumer] Received 'waiting_list_update' event in group for doctor {self.doctor_id}.")
         await self.send_waiting_list()
 
     @sync_to_async
@@ -101,7 +107,7 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
             waiting_entries = WaitingRoomEntry.objects.filter(
                 doctor=doctor
             ).exclude(
-                status__in=['Done', 'Cancelled', 'Left Call'] # NEW: Exclude 'Left Call' from active list
+                status__in=['Done', 'Cancelled', 'Left Call']
             ).select_related('patient').order_by('arrived_at')
             data = []
             for entry in waiting_entries:
@@ -116,16 +122,18 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
                     'guest_pin': entry.guest_pin,
                     'added_by_doctor': entry.added_by_doctor,
                 })
+            logger.info(f"[Consumer] Fetched waiting list data for doctor {self.doctor_id}: {len(data)} entries.")
             return data
         except Doctor.DoesNotExist:
-            print(f"Doctor with ID {self.doctor_id} not found.")
+            logger.error(f"[Consumer] Doctor with ID {self.doctor_id} not found.")
             return []
         except Exception as e:
-            print(f"Error fetching waiting list: {e}")
+            logger.error(f"[Consumer] Error fetching waiting list for doctor {self.doctor_id}: {e}", exc_info=True)
             return []
 
     async def send_waiting_list(self):
         waiting_list = await self.get_waiting_list_data()
+        logger.info(f"[Consumer] Sending waiting_list to doctor {self.doctor_id} via WebSocket.")
         await self.send(text_data=json.dumps({
             'type': 'waiting_list',
             'data': waiting_list
@@ -137,11 +145,11 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
             entry = WaitingRoomEntry.objects.get(id=entry_id, doctor_id=self.doctor_id)
             entry.status = new_status
             entry.save()
-            print(f"Updated entry {entry_id} to status {new_status}")
+            logger.info(f"[Consumer] Updated entry {entry_id} to status {new_status} via direct client command.")
         except WaitingRoomEntry.DoesNotExist:
-            print(f"WaitingRoomEntry with ID {entry_id} not found for doctor {self.doctor_id}.")
+            logger.warning(f"[Consumer] WaitingRoomEntry with ID {entry_id} not found for doctor {self.doctor_id}.")
         except Exception as e:
-            print(f"Error updating status for entry {entry_id}: {e}")
+            logger.error(f"[Consumer] Error updating status for entry {entry_id}: {e}", exc_info=True)
 
     async def add_patient_to_waiting_room(self, patient_name, patient_uuid):
         try:
@@ -164,7 +172,7 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
                 is_added_by_doctor = True
 
             if not await sync_to_async(WaitingRoomEntry.objects.filter(
-                doctor=doctor, patient=patient, status__in=['Waiting', 'In Progress', 'In Call'] # NEW: Also check 'In Call'
+                doctor=doctor, patient=patient, status__in=['Waiting', 'In Progress', 'In Call']
             ).exists)():
                 host_pin = await self._generate_unique_pin()
                 guest_pin = await self._generate_unique_pin()
@@ -176,33 +184,34 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
                     guest_pin=guest_pin,
                     added_by_doctor=is_added_by_doctor,
                 )
-                print(f"Added patient {patient_name} (UUID: {patient.uuid}) to waiting room for doctor {self.doctor_id} with Host PIN: {host_pin}, Guest PIN: {guest_pin}. Added by doctor: {is_added_by_doctor}")
+                logger.info(f"[Consumer] Added patient {patient_name} (UUID: {patient.uuid}) to waiting room for doctor {self.doctor_id}. Added by doctor: {is_added_by_doctor}")
             else:
-                print(f"Patient {patient_name} (UUID: {patient.uuid}) is already in the active queue for doctor {self.doctor_id}.")
+                logger.info(f"[Consumer] Patient {patient_name} (UUID: {patient.uuid}) is already in the active queue for doctor {self.doctor_id}.")
 
         except Doctor.DoesNotExist:
-            print(f"Doctor with ID {self.doctor_id} not found.")
+            logger.error(f"[Consumer] Doctor with ID {self.doctor_id} not found.")
         except Exception as e:
-            print(f"Error adding patient {patient_name}: {e}")
+            logger.error(f"[Consumer] Error adding patient {patient_name}: {e}", exc_info=True)
 
     @sync_to_async
     def remove_waiting_entry(self, entry_id):
         try:
             entry = WaitingRoomEntry.objects.get(id=entry_id, doctor_id=self.doctor_id)
             entry.delete()
-            print(f"Removed waiting room entry with ID {entry_id}.")
+            logger.info(f"[Consumer] Removed waiting room entry with ID {entry_id}.")
         except WaitingRoomEntry.DoesNotExist:
-            print(f"WaitingRoomEntry with ID {entry_id} not found for doctor {self.doctor_id}.")
+            logger.warning(f"[Consumer] WaitingRoomEntry with ID {entry_id} not found for doctor {self.doctor_id}.")
         except Exception as e:
-            print(f"Error removing entry {entry_id}: {e}")
+            logger.error(f"[Consumer] Error removing entry {entry_id}: {e}", exc_info=True)
 
     @sync_to_async
     def purge_doctor_history(self):
         try:
             deleted_count, _ = WaitingRoomEntry.objects.filter(
                 doctor_id=self.doctor_id,
-                status__in=['Done', 'Cancelled', 'Left Call'] # NEW: Include 'Left Call' in history purge
+                status__in=['Done', 'Cancelled', 'Left Call']
             ).delete()
-            print(f"Purged {deleted_count} historical entries for doctor {self.doctor_id}.")
+            logger.info(f"[Consumer] Purged {deleted_count} historical entries for doctor {self.doctor_id}.")
         except Exception as e:
-            print(f"Error purging history for doctor {self.doctor_id}: {e}")
+            logger.error(f"[Consumer] Error purging history for doctor {self.doctor_id}: {e}", exc_info=True)
+

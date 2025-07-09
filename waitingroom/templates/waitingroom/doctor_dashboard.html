@@ -225,7 +225,7 @@
                         'Connect to Patient',
                         `Connect to ${patientName}'s virtual room?`,
                         () => {
-                            const pexipUrl = `https://${PEXIP_ADDRESS}/${PEXIP_PATH}/m/?conference=${patientUuid}&name=${encodeURIComponent(`Dr. ${doctorNameElement.textContent}`)}&role=host&pin=${hostPin}`;
+                            const pexipUrl = `https://${PEXIP_ADDRESS}/${PEXIP_PATH}/m/?conference=${patientUuid}&name=${encodeURIComponent(`Dr. ${doctorNameElement.textContent}`)}&pin=${hostPin}`;
                             window.open(pexipUrl, '_blank');
                         },
                         () => {
