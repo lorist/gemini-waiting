@@ -181,7 +181,7 @@
 
                 showCustomModal(
                     'Join Doctor\'s Room',
-                    `Your appointment is now in progress. Please use the Host PIN: <span class="font-bold text-blue-700">${currentHostPin}</span> and Guest PIN: <span class="font-bold text-blue-700">${currentGuestPin}</span>. Would you like to join the doctor\'s virtual room?`,
+                    `Your appointment is now in progress.  Would you like to join the doctor\'s virtual room?`,
                     () => {
                         const pexipUrl = `https://${PEXIP_ADDRESS}/${PEXIP_PATH}/m/?conference=${currentPatientUuid}&name=${encodeURIComponent(currentPatientName)}&role=guest&pin=${currentGuestPin}`;
                         window.open(pexipUrl, '_blank');
