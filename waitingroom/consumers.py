@@ -84,12 +84,37 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
                     'type': 'error',
                     'message': 'Unauthorized purge request.'
                 }))
+        elif message_type == 'chat_message': # NEW: Handle chat messages
+            sender = text_data_json.get('sender')
+            message = text_data_json.get('message')
+            patient_uuid = text_data_json.get('patient_uuid') # To target specific patient's chat
+            logger.info(f"[Consumer] Chat message from {sender} (Patient UUID: {patient_uuid}): {message}")
 
+            # Send the chat message to the entire group
+            await self.channel_layer.group_send(
+                self.doctor_group_name,
+                {
+                    'type': 'send_chat_message', # This will call send_chat_message method below
+                    'sender': sender,
+                    'message': message,
+                    'patient_uuid': patient_uuid # Include patient_uuid to filter on frontend
+                }
+            )
 
     async def waiting_list_update(self, event):
-        # This method is called when a message is sent to the doctor's group
         logger.info(f"[Consumer] Received 'waiting_list_update' event in group for doctor {self.doctor_id}.")
         await self.send_waiting_list()
+
+    async def send_chat_message(self, event): # NEW: Method to send chat messages to client
+        # Send the chat message over the WebSocket to the client
+        await self.send(text_data=json.dumps({
+            'type': 'chat_message',
+            'sender': event['sender'],
+            'message': event['message'],
+            'patient_uuid': event['patient_uuid'] # Pass patient_uuid for frontend filtering
+        }))
+        logger.info(f"[Consumer] Sent chat message to client: {event['sender']} - {event['message']}")
+
 
     @sync_to_async
     def _generate_unique_pin(self):

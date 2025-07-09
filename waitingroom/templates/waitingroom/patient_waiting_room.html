@@ -42,6 +42,19 @@
             <p class="text-sm text-gray-600 mt-4 text-center" id="statusMessage">Waiting for updates...</p>
             <p class="text-xs text-gray-400 mt-2 text-center">Your ID: <span id="myPatientUuid"></span></p>
             <p class="text-sm text-gray-600 mt-2 text-center" id="myGuestPinDisplay">Guest PIN: <span class="font-bold"></span></p>
+
+            <!-- Chat Section for Patient -->
+            <div id="patientChatSection" class="mt-8 p-4 bg-gray-50 rounded-md">
+                <h3 class="text-xl font-bold text-gray-800 mb-3 text-center">Chat with Dr. <span id="chatDoctorName"></span></h3>
+                <div id="patientChatMessages" class="bg-white p-3 rounded-md h-48 overflow-y-auto mb-3 space-y-2 border border-gray-200">
+                    <!-- Patient chat messages will appear here -->
+                </div>
+                <div class="flex gap-2">
+                    <input type="text" id="patientChatInput" placeholder="Type your message..." class="flex-grow p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <button id="sendPatientChatBtn" class="bg-blue-600 text-white px-3 py-2 rounded-md font-semibold hover:bg-blue-700 transition duration-200 ease-in-out shadow-md">Send</button>
+                </div>
+            </div>
+
         </div>
 
         <!-- Custom Modal for Alerts/Confirmations (reused for Pexip prompt) -->
@@ -80,6 +93,14 @@
         const modalMessage = document.getElementById('modalMessage');
         const modalConfirmBtn = document.getElementById('modalConfirmBtn');
         const modalCancelBtn = document.getElementById('modalCancelBtn');
+
+        // Chat elements for patient
+        const patientChatSection = document.getElementById('patientChatSection');
+        const chatDoctorNameSpan = document.getElementById('chatDoctorName');
+        const patientChatMessagesDiv = document.getElementById('patientChatMessages');
+        const patientChatInput = document.getElementById('patientChatInput');
+        const sendPatientChatBtn = document.getElementById('sendPatientChatBtn');
+
 
         let patientSocket = null;
         let currentPatientName = '';
@@ -173,11 +194,13 @@
                 myStatusSpan.classList.add('bg-yellow-300', 'text-yellow-800');
                 statusMessageP.textContent = `You are currently waiting in the queue.`;
                 myGuestPinDisplay.classList.add('hidden'); // Hide guest PIN
+                patientChatSection.classList.remove('hidden'); // Show chat section
             } else if (status === 'In Progress') {
                 myStatusSpan.classList.add('bg-blue-300', 'text-blue-800');
                 myGuestPinDisplay.querySelector('span').textContent = currentGuestPin;
                 myGuestPinDisplay.classList.remove('hidden'); // Show guest PIN
                 statusMessageP.textContent = `You are currently being seen by the doctor. Please join the call.`;
+                patientChatSection.classList.remove('hidden'); // Show chat section
 
                 showCustomModal(
                     'Join Doctor\'s Room',
@@ -198,12 +221,14 @@
                 myGuestPinDisplay.querySelector('span').textContent = currentGuestPin;
                 myGuestPinDisplay.classList.remove('hidden');
                 statusMessageP.textContent = `You are currently in the call with Dr. ${currentDoctorName}.`;
+                patientChatSection.classList.remove('hidden'); // Show chat section
                 // No modal here, as they are already in the call
             }
             else if (status === 'Done') {
                 myStatusSpan.classList.add('bg-green-300', 'text-green-800');
                 statusMessageP.textContent = `Your appointment is complete.`;
                 myGuestPinDisplay.classList.add('hidden');
+                patientChatSection.classList.add('hidden'); // Hide chat section
                 showCustomModal(
                     'Appointment Complete',
                     'Your appointment has been marked as complete. You will now be redirected to the join page.',
@@ -217,6 +242,7 @@
                 myStatusSpan.classList.add('bg-red-300', 'text-red-800');
                 statusMessageP.textContent = `Your appointment has ended or been cancelled.`;
                 myGuestPinDisplay.classList.add('hidden');
+                patientChatSection.classList.add('hidden'); // Hide chat section
                 showCustomModal(
                     'Appointment Ended',
                     'Your appointment has ended or been cancelled. You will now be redirected to the join page.',
@@ -229,8 +255,60 @@
             } else {
                 myStatusSpan.classList.add('bg-gray-300', 'text-gray-800');
                 myGuestPinDisplay.classList.add('hidden');
+                patientChatSection.classList.add('hidden'); // Hide chat section
             }
         }
+
+        function displayPatientChatMessage(sender, message, patientUuid) {
+            // Check if the message is for this patient (based on their UUID)
+            if (currentPatientUuid === patientUuid) {
+                // Use the helper function to append messages, which now handles link detection
+                appendMessageToPatientChatDiv(sender, message);
+            }
+        }
+
+        // NEW: Helper function to append messages to the patient chat div, with link detection
+        function appendMessageToPatientChatDiv(sender, message) {
+            const messageElement = document.createElement('div');
+            messageElement.className = 'p-2 rounded-lg';
+
+            // Regex to find URLs
+            const urlRegex = /(https?:\/\/[^\s]+)/g;
+            let formattedMessage = message.replace(urlRegex, (url) => {
+                return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline">${url}</a>`;
+            });
+
+            if (sender === currentPatientName) { // Message sent by patient themselves
+                messageElement.classList.add('bg-blue-200', 'self-end', 'text-right');
+                messageElement.innerHTML = `<span class="font-bold">You:</span> ${formattedMessage}`;
+            } else { // Message sent by doctor (or other participant, though unlikely in this setup)
+                messageElement.classList.add('bg-gray-200', 'self-start');
+                messageElement.innerHTML = `<span class="font-bold">${sender}:</span> ${formattedMessage}`;
+            }
+            patientChatMessagesDiv.appendChild(messageElement);
+            patientChatMessagesDiv.scrollTop = patientChatMessagesDiv.scrollHeight; // Scroll to bottom
+        }
+
+
+        sendPatientChatBtn.onclick = function() {
+            const message = patientChatInput.value.trim();
+            if (message && patientSocket && patientSocket.readyState === WebSocket.OPEN) {
+                patientSocket.send(JSON.stringify({
+                    'type': 'chat_message',
+                    'sender': currentPatientName,
+                    'message': message,
+                    'patient_uuid': currentPatientUuid // Send patient UUID with message
+                }));
+                patientChatInput.value = ''; // Clear input
+            }
+        };
+
+        patientChatInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendPatientChatBtn.click();
+            }
+        });
+
 
         function connectPatientWebSocket() {
             joinFormSection.classList.add('hidden');
@@ -238,6 +316,7 @@
             myPatientNameSpan.textContent = currentPatientName;
             myDoctorNameSpan.textContent = currentDoctorName;
             myPatientUuidSpan.textContent = currentPatientUuid;
+            chatDoctorNameSpan.textContent = currentDoctorName; // Set doctor name for chat
             updatePatientStatusUI('Waiting');
 
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -278,6 +357,8 @@
                             }
                         }
                     }
+                } else if (data.type === 'chat_message') { // NEW: Handle incoming chat messages
+                    displayPatientChatMessage(data.sender, data.message, data.patient_uuid);
                 } else if (data.type === 'error') {
                     showCustomModal('Error', data.message);
                 }
