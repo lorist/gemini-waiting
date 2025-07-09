@@ -267,7 +267,7 @@
             }
         }
 
-        // NEW: Helper function to append messages to the patient chat div, with link detection
+        // Helper function to append messages to the patient chat div, with link detection
         function appendMessageToPatientChatDiv(sender, message) {
             const messageElement = document.createElement('div');
             messageElement.className = 'p-2 rounded-lg';
@@ -378,6 +378,9 @@
                 showCustomModal('Connection Error', 'An error occurred with the WebSocket connection. Please refresh the page.');
             };
         }
+
+        // Removed the beforeunload event listener as server-side handling is more reliable.
+
 
         joinQueueBtn.onclick = function() {
             const selectedDoctorId = doctorSelect.value;

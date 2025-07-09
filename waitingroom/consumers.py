@@ -1,11 +1,12 @@
 # myapp/consumers.py
 import json
 from channels.generic.websocket import AsyncWebsocketConsumer
-from asgiref.sync import sync_to_async
-from .models import WaitingRoomEntry, Doctor, Patient
+from asgiref.sync import sync_to_async, async_to_sync
+from waitingroom.models import WaitingRoomEntry, Doctor, Patient
 import uuid
 import random
 import logging
+from channels.layers import get_channel_layer
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +14,7 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.doctor_id = self.scope['url_route']['kwargs']['doctor_id']
         self.doctor_group_name = f'waiting_room_{self.doctor_id}'
+        self.patient_uuid = None # Initialize patient_uuid for this consumer instance
 
         await self.channel_layer.group_add(
             self.doctor_group_name,
@@ -30,6 +32,13 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
             self.channel_name
         )
         logger.info(f"[Consumer] WebSocket disconnected for doctor {self.doctor_id} with code {close_code}")
+
+        # If this consumer was associated with a patient, update their status to 'Left Call'
+        if self.patient_uuid:
+            logger.info(f"[Consumer] Patient {self.patient_uuid} disconnected. Updating status to 'Left Call'.")
+            # Call the async database function to update the status
+            await self.update_patient_status_on_disconnect(self.patient_uuid)
+
 
     async def receive(self, text_data):
         text_data_json = json.loads(text_data)
@@ -50,6 +59,8 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
         elif message_type == 'add_patient':
             patient_name = text_data_json.get('patient_name')
             patient_uuid = text_data_json.get('patient_uuid')
+            # Store the patient_uuid with this consumer instance
+            self.patient_uuid = patient_uuid
             await self.add_patient_to_waiting_room(patient_name, patient_uuid)
             await self.channel_layer.group_send(
                 self.doctor_group_name,
@@ -84,20 +95,19 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
                     'type': 'error',
                     'message': 'Unauthorized purge request.'
                 }))
-        elif message_type == 'chat_message': # NEW: Handle chat messages
+        elif message_type == 'chat_message':
             sender = text_data_json.get('sender')
             message = text_data_json.get('message')
-            patient_uuid = text_data_json.get('patient_uuid') # To target specific patient's chat
+            patient_uuid = text_data_json.get('patient_uuid')
             logger.info(f"[Consumer] Chat message from {sender} (Patient UUID: {patient_uuid}): {message}")
 
-            # Send the chat message to the entire group
             await self.channel_layer.group_send(
                 self.doctor_group_name,
                 {
-                    'type': 'send_chat_message', # This will call send_chat_message method below
+                    'type': 'send_chat_message',
                     'sender': sender,
                     'message': message,
-                    'patient_uuid': patient_uuid # Include patient_uuid to filter on frontend
+                    'patient_uuid': patient_uuid
                 }
             )
 
@@ -105,16 +115,14 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
         logger.info(f"[Consumer] Received 'waiting_list_update' event in group for doctor {self.doctor_id}.")
         await self.send_waiting_list()
 
-    async def send_chat_message(self, event): # NEW: Method to send chat messages to client
-        # Send the chat message over the WebSocket to the client
+    async def send_chat_message(self, event):
         await self.send(text_data=json.dumps({
             'type': 'chat_message',
             'sender': event['sender'],
             'message': event['message'],
-            'patient_uuid': event['patient_uuid'] # Pass patient_uuid for frontend filtering
+            'patient_uuid': event['patient_uuid']
         }))
         logger.info(f"[Consumer] Sent chat message to client: {event['sender']} - {event['message']}")
-
 
     @sync_to_async
     def _generate_unique_pin(self):
@@ -175,6 +183,38 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
             logger.warning(f"[Consumer] WaitingRoomEntry with ID {entry_id} not found for doctor {self.doctor_id}.")
         except Exception as e:
             logger.error(f"[Consumer] Error updating status for entry {entry_id}: {e}", exc_info=True)
+
+    @sync_to_async
+    def update_patient_status_on_disconnect(self, patient_uuid_str):
+        """
+        Updates a patient's WaitingRoomEntry status to 'Left Call' when their WebSocket disconnects.
+        """
+        try:
+            # Find the WaitingRoomEntry for the given patient_uuid and doctor_id
+            # Ensure it's not already in a 'Done' or 'Cancelled' state
+            entry = WaitingRoomEntry.objects.select_related('patient').get(
+                patient__uuid=patient_uuid_str,
+                doctor_id=self.doctor_id, # Ensure it's for the correct doctor
+                status__in=['Waiting', 'In Progress', 'In Call'] # Only update if active
+            )
+            entry.status = 'Left Call'
+            entry.save()
+            logger.info(f"[Consumer] Patient {patient_uuid_str} status updated to 'Left Call' on disconnect.")
+
+            # Notify the doctor's dashboard about the change
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                self.doctor_group_name, # Corrected: Use self.doctor_group_name
+                {
+                    'type': 'waiting_list_update',
+                    'message': f'Patient {entry.patient.name} left the queue.'
+                }
+            )
+        except WaitingRoomEntry.DoesNotExist:
+            logger.info(f"[Consumer] No active WaitingRoomEntry found for patient {patient_uuid_str} on disconnect, or already handled.")
+        except Exception as e:
+            logger.error(f"[Consumer] Error updating patient {patient_uuid_str} status on disconnect: {e}", exc_info=True)
+
 
     async def add_patient_to_waiting_room(self, patient_name, patient_uuid):
         try:
