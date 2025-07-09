@@ -55,6 +55,9 @@
                 </div>
             </div>
 
+            {# NEW: Leave Queue Button #}
+            <button id="leaveQueueBtn" class="mt-6 w-full bg-red-600 text-white px-6 py-3 rounded-md font-semibold hover:bg-red-700 transition duration-200 ease-in-out shadow-md">Leave Queue</button>
+
         </div>
 
         <!-- Custom Modal for Alerts/Confirmations (reused for Pexip prompt) -->
@@ -100,6 +103,9 @@
         const patientChatMessagesDiv = document.getElementById('patientChatMessages');
         const patientChatInput = document.getElementById('patientChatInput');
         const sendPatientChatBtn = document.getElementById('sendPatientChatBtn');
+
+        // NEW: Leave Queue Button element
+        const leaveQueueBtn = document.getElementById('leaveQueueBtn');
 
 
         let patientSocket = null;
@@ -379,7 +385,27 @@
             };
         }
 
-        // Removed the beforeunload event listener as server-side handling is more reliable.
+        // NEW: Event listener for the Leave Queue button
+        leaveQueueBtn.onclick = function() {
+            showCustomModal(
+                'Confirm Leaving Queue',
+                'Are you sure you want to leave the queue? Your session will end.',
+                () => {
+                    if (patientSocket && patientSocket.readyState === WebSocket.OPEN) {
+                        patientSocket.send(JSON.stringify({
+                            'type': 'leave_queue',
+                            'patient_uuid': currentPatientUuid,
+                            'doctor_id': currentDoctorId
+                        }));
+                    }
+                    clearPatientData();
+                    window.location.href = '/join-queue/'; // Redirect immediately
+                },
+                () => {
+                    console.log("Leaving queue cancelled.");
+                }
+            );
+        };
 
 
         joinQueueBtn.onclick = function() {
