@@ -1,3 +1,4 @@
+{# templates/base.html #}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -6,24 +7,59 @@
     <title>{% block title %}My App{% endblock %}</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-    {% block extra_head %}{% endblock %} {# For additional CSS/meta tags specific to a page #}
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+
+            background-color: #f0f2f5;
+        }
+        .container {
+            max-width: 900px;
+        }
+        .card {
+            background-color: #ffffff;
+            border-radius: 0.75rem; /* rounded-xl */
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Base styles for all status elements (buttons and spans) */
+        .status-interactive-button,
+        .status-display {
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            display: inline-block; /* Essential for padding/width on spans */
+            min-width: 80px; /* Ensure a minimum width for visibility */
+            text-align: center; /* Center text within the element */
+        }
+
+        /* Styles for interactive status buttons */
+        .status-interactive-button {
+            transition: background-color 0.2s, transform 0.1s;
+            cursor: pointer; /* Indicate it's clickable */
+        }
+        .status-interactive-button:hover {
+            transform: translateY(-1px);
+        }
+        .status-waiting { background-color: #fcd34d; color: #8a6500; } /* yellow-300 */
+        .status-waiting:hover { background-color: #fbbf24; } /* yellow-400 */
+        .status-in-progress { background-color: #60a5fa; color: #1e40af; } /* blue-400 */
+        .status-in-progress:hover { background-color: #3b82f6; } /* blue-500 */
+        .status-done { background-color: #4ade80; color: #166534; } /* green-400 */
+        .status-done:hover { background-color: #22c55e; } /* green-500 */
+        .status-cancelled { background-color: #f87171; color: #991b1b; } /* red-400 */
+        .status-cancelled:hover { background-color: #ef4444; } /* red-500 */
+
+        /* Styles for non-interactive status displays */
+        .status-display {
+            cursor: default; /* Indicate it's not clickable */
+        }
+        .status-in-call { background-color: #34d399; color: #065f46; } /* green-400, text-green-800 */
+        .status-left-call { background-color: #fca5a5; color: #7f1d1d; } /* red-300, text-red-800 */
+    </style>
 </head>
-<body class="bg-gray-100 font-inter">
-    <nav class="bg-blue-600 p-4 text-white shadow-md">
-        <div class="container mx-auto flex justify-between items-center">
-            <a href="/" class="text-2xl font-bold">Waiting Room App</a>
-            <div>
-                {# Navigation links here #}
-            </div>
-        </div>
-    </nav>
-
-    <main class="container mx-auto mt-8 p-4">
-        {% block content %}
-            {# Content from child templates will go here #}
-        {% endblock %}
-    </main>
-
-    {% block extra_js %}{% endblock %} {# For page-specific JavaScript #}
+<body class="p-4 sm:p-6 md:p-8 flex items-center justify-center min-h-screen">
+    {% block content %}{% endblock %}
+    {% block extra_js %}{% endblock %}
 </body>
 </html>
