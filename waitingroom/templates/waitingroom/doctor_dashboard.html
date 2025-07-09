@@ -17,7 +17,7 @@
             <p class="text-center text-gray-500" id="loadingMessage">Loading waiting list...</p>
         </div>
 
-        <!-- NEW: Button to History Page -->
+        <!-- Button to History Page -->
         <div class="mt-8 text-center">
             <a href="{% url 'doctor_history' doctor.id %}" class="inline-block bg-gray-700 text-white px-6 py-3 rounded-md font-semibold hover:bg-gray-800 transition duration-200 ease-in-out shadow-md">
                 View Patient History
@@ -34,6 +34,19 @@
                 <input type="text" id="chatInput" placeholder="Type your message..." class="flex-grow p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
                 <button id="sendChatBtn" class="bg-blue-600 text-white px-4 py-2 rounded-md font-semibold hover:bg-blue-700 transition duration-200 ease-in-out shadow-md">Send</button>
             </div>
+        </div>
+
+        <!-- Whiteboard Section -->
+        <div id="whiteboardSection" class="mt-8 p-6 card hidden">
+            <h2 class="text-2xl font-bold text-gray-800 mb-4 text-center">Shared Whiteboard with <span id="whiteboardPatientName"></span></h2>
+            <div class="flex flex-wrap gap-2 mb-4 justify-center">
+                <button class="whiteboard-color-button w-8 h-8 rounded-full border-2 border-gray-300" style="background-color: black;" data-color="black"></button>
+                <button class="whiteboard-color-button w-8 h-8 rounded-full border-2 border-gray-300" style="background-color: red;" data-color="red"></button>
+                <button class="whiteboard-color-button w-8 h-8 rounded-full border-2 border-gray-300" style="background-color: blue;" data-color="blue"></button>
+                <button class="whiteboard-color-button w-8 h-8 rounded-full border-2 border-gray-300" style="background-color: green;" data-color="green"></button>
+                <button id="clearWhiteboardBtn" class="bg-gray-200 text-gray-800 px-4 py-2 rounded-md font-semibold hover:bg-gray-300 transition duration-200">Clear</button>
+            </div>
+            <canvas id="whiteboardCanvas" class="border border-gray-300 rounded-md bg-white w-full" style="aspect-ratio: 16 / 9;"></canvas>
         </div>
 
 
@@ -87,6 +100,19 @@
         const chatInput = document.getElementById('chatInput');
         const sendChatBtn = document.getElementById('sendChatBtn');
 
+        // Whiteboard elements
+        const whiteboardSection = document.getElementById('whiteboardSection');
+        const whiteboardPatientNameSpan = document.getElementById('whiteboardPatientName');
+        const whiteboardCanvas = document.getElementById('whiteboardCanvas');
+        const clearWhiteboardBtn = document.getElementById('clearWhiteboardBtn');
+        const whiteboardColorButtons = document.querySelectorAll('.whiteboard-color-button');
+        let ctx = whiteboardCanvas.getContext('2d');
+        let isDrawing = false;
+        let lastX = 0;
+        let lastY = 0;
+        let drawColor = 'black'; // Default drawing color
+        let activeWhiteboardPatientUuid = null; // To track which patient's whiteboard is active
+
         let activeChatPatientUuid = null; // To track which patient the doctor is currently chatting with
         const unreadMessages = {}; // Store unread message counts per patient UUID
         const patientChatHistories = {}; // Store chat history for each patient
@@ -127,8 +153,9 @@
 
         chatSocket.onopen = function(e) {
             console.log("WebSocket connection opened.");
-            doctorNameElement.textContent = `Doctor {{ doctor.name }}`;
+            doctorNameElement.textContent = `Dr. {{ doctor.name }}`;
             loadingMessage.textContent = "Connected. Waiting for updates...";
+            resizeCanvas(); // Set initial canvas size
         };
 
         chatSocket.onmessage = function(e) {
@@ -149,6 +176,18 @@
                 });
 
                 displayChatMessage(data.sender, data.message, data.patient_uuid);
+            } else if (data.type === 'drawing_data') {
+                if (activeWhiteboardPatientUuid === data.patient_uuid) {
+                    drawOnCanvas(data.data);
+                }
+            } else if (data.type === 'whiteboard_history') { // NEW: Handle incoming whiteboard history
+                if (activeWhiteboardPatientUuid === data.patient_uuid) {
+                    // Clear canvas before drawing history
+                    ctx.clearRect(0, 0, whiteboardCanvas.width, whiteboardCanvas.height);
+                    data.data.forEach(drawingCommand => {
+                        drawOnCanvas(drawingCommand);
+                    });
+                }
             } else if (data.type === 'error') {
                 showCustomModal('Error', data.message);
             }
@@ -167,17 +206,12 @@
         };
 
         function displayChatMessage(sender, message, patientUuid) {
-            // Check if the message is from the patient and if their chat is not active
-            // This condition ensures the alert only shows for unread messages from patients
             if (sender !== `Dr. {{ doctor.name }}` && activeChatPatientUuid !== patientUuid) {
-                // Increment unread count and update visual alert
                 unreadMessages[patientUuid] = (unreadMessages[patientUuid] || 0) + 1;
                 updateChatAlert(patientUuid);
             }
 
-            // Only display message if it's for the currently active chat patient
             if (activeChatPatientUuid === patientUuid) {
-                // Use the helper function to append messages, which now handles link detection
                 appendMessageToChatDiv(sender, message);
             }
         }
@@ -189,12 +223,31 @@
                 if (!alertBadge) {
                     alertBadge = document.createElement('span');
                     alertBadge.className = 'chat-alert-badge absolute top-0 right-0 -mt-1 -mr-1 bg-red-500 text-white text-xs font-bold px-2 py-1 rounded-full';
-                    chatButton.style.position = 'relative'; // Ensure button is positioned for absolute badge
+                    chatButton.style.position = 'relative';
                     chatButton.appendChild(alertBadge);
                 }
                 const count = unreadMessages[patientUuid] || 0;
                 if (count > 0) {
                     alertBadge.textContent = count;
+                    alertBadge.classList.remove('hidden');
+                } else {
+                    alertBadge.classList.add('hidden');
+                }
+            }
+        }
+
+        function updateWhiteboardAlert(patientUuid, isActive) {
+            const whiteboardButton = document.querySelector(`.whiteboard-toggle-button[data-patient-uuid="${patientUuid}"]`);
+            if (whiteboardButton) {
+                let alertBadge = whiteboardButton.querySelector('.whiteboard-active-badge');
+                if (!alertBadge) {
+                    alertBadge = document.createElement('span');
+                    alertBadge.className = 'whiteboard-active-badge absolute top-0 right-0 -mt-1 -mr-1 bg-blue-500 text-white text-xs font-bold px-2 py-1 rounded-full';
+                    whiteboardButton.style.position = 'relative';
+                    whiteboardButton.appendChild(alertBadge);
+                }
+                if (isActive) {
+                    alertBadge.textContent = 'Active'; // Or a simple dot/icon
                     alertBadge.classList.remove('hidden');
                 } else {
                     alertBadge.classList.add('hidden');
@@ -212,9 +265,7 @@
                     'message': message,
                     'patient_uuid': activeChatPatientUuid
                 }));
-                // Store sent message in history (already handled by chatSocket.onmessage)
-                // The message will be displayed when it's echoed back from the server via WebSocket.
-                chatInput.value = ''; // Clear input
+                chatInput.value = '';
             }
         };
 
@@ -226,11 +277,16 @@
 
 
         function updateWaitingListUI(waitingList) {
-            waitingListDiv.innerHTML = ''; // Clear existing list
+            waitingListDiv.innerHTML = '';
             if (waitingList.length === 0) {
                 waitingListDiv.innerHTML = '<p class="text-center text-gray-500">No patients in the waiting room.</p>';
+                // NEW: If no patients, ensure whiteboard is hidden
+                whiteboardSection.classList.add('hidden');
+                activeWhiteboardPatientUuid = null;
                 return;
             }
+
+            let foundActiveWhiteboardPatient = false; // NEW: Flag to track if the active whiteboard patient is still in an active status
 
             waitingList.forEach(entry => {
                 const entryCard = document.createElement('div');
@@ -246,15 +302,15 @@
                     <div class="flex flex-wrap justify-center sm:justify-end gap-2">
                         <button data-id="${entry.id}" data-status="Waiting" class="status-interactive-button status-waiting ${entry.status === 'Waiting' ? 'opacity-100' : 'opacity-50'}">Waiting</button>
                         <button data-id="${entry.id}" data-status="In Progress" class="status-interactive-button status-in-progress ${entry.status === 'In Progress' ? 'opacity-100' : 'opacity-50'}">In Progress</button>
-                        <span class="status-display status-in-call ${entry.status === 'In Call' ? 'opacity-100' : 'opacity-50'}">In Call</span> {# Changed to span, no data-id/status #}
+                        <span class="status-display status-in-call ${entry.status === 'In Call' ? 'opacity-100' : 'opacity-50'}">In Call</span>
                         <button data-id="${entry.id}" data-status="Done" class="status-interactive-button status-done ${entry.status === 'Done' ? 'opacity-100' : 'opacity-50'}">Done</button>
                         <button data-id="${entry.id}" data-status="Cancelled" data-action="remove" class="status-interactive-button status-cancelled ${entry.status === 'Cancelled' ? 'opacity-100' : 'opacity-50'}">Remove</button>
-                        ${entry.status === 'In Progress' || entry.status === 'In Call' ? ` {# Show connect button if In Progress or In Call #}
+                        ${entry.status === 'In Progress' || entry.status === 'In Call' ? `
                             <button data-patient-uuid="${entry.patient_uuid}" data-host-pin="${entry.host_pin}" data-patient-name="${entry.patient_name}" class="connect-button bg-purple-600 text-white px-4 py-2 rounded-md font-semibold hover:bg-purple-700 transition duration-200 ease-in-out shadow-md">
                                 Connect
                             </button>
                         ` : ''}
-                        ${entry.added_by_doctor && (entry.status === 'In Progress' || entry.status === 'In Call') ? ` {# Conditionally render based on added_by_doctor AND In Progress/In Call status #}
+                        ${entry.added_by_doctor && (entry.status === 'In Progress' || entry.status === 'In Call') ? `
                             <button class="copy-link-button bg-gray-500 text-white px-4 py-2 rounded-md font-semibold hover:bg-gray-600 transition duration-200 ease-in-out shadow-md"
                                     data-patient-uuid="${entry.patient_uuid}"
                                     data-patient-name="${entry.patient_name}"
@@ -263,13 +319,28 @@
                             </button>
                         ` : ''}
                         <button data-patient-uuid="${entry.patient_uuid}" data-patient-name="${entry.patient_name}" class="chat-toggle-button bg-green-500 text-white px-4 py-2 rounded-md font-semibold hover:bg-green-600 transition duration-200 ease-in-out shadow-md">Chat</button>
+                        ${entry.status === 'In Progress' || entry.status === 'In Call' ? `
+                            <button data-patient-uuid="${entry.patient_uuid}" data-patient-name="${entry.patient_name}" class="whiteboard-toggle-button bg-indigo-500 text-white px-4 py-2 rounded-md font-semibold hover:bg-indigo-600 transition duration-200 ease-in-out shadow-md">Whiteboard</button>
+                        ` : ''}
                     </div>
                 `;
                 waitingListDiv.appendChild(entryCard);
-                updateChatAlert(entry.patient_uuid); // Initialize or update alert for existing entries
+                updateChatAlert(entry.patient_uuid);
+                updateWhiteboardAlert(entry.patient_uuid, entry.whiteboard_active); // Update whiteboard badge
+
+                // NEW: Check if the currently active whiteboard patient is still in an active status
+                if (activeWhiteboardPatientUuid === entry.patient_uuid && (entry.status === 'In Progress' || entry.status === 'In Call')) {
+                    foundActiveWhiteboardPatient = true;
+                }
             });
 
-            // Add event listeners to status buttons (now targeting status-interactive-button)
+            // NEW: If the previously active whiteboard patient is no longer in an active status, hide the whiteboard
+            if (activeWhiteboardPatientUuid && !foundActiveWhiteboardPatient) {
+                whiteboardSection.classList.add('hidden');
+                activeWhiteboardPatientUuid = null;
+            }
+
+
             document.querySelectorAll('.status-interactive-button').forEach(button => {
                 button.onclick = function() {
                     const entryId = this.dataset.id;
@@ -311,7 +382,6 @@
                 };
             });
 
-            // Add event listeners for connect buttons
             document.querySelectorAll('.connect-button').forEach(button => {
                 button.onclick = function() {
                     const patientUuid = this.dataset.patientUuid;
@@ -334,7 +404,6 @@
                 };
             });
 
-            // Add event listeners for copy link buttons
             document.querySelectorAll('.copy-link-button').forEach(button => {
                 button.onclick = function() {
                     const patientUuid = this.dataset.patientUuid;
@@ -354,45 +423,87 @@
                 };
             });
 
-            // NEW: Add event listeners for chat toggle buttons
             document.querySelectorAll('.chat-toggle-button').forEach(button => {
                 button.onclick = function() {
                     const patientUuid = this.dataset.patientUuid;
                     const patientName = this.dataset.patientName;
 
                     if (activeChatPatientUuid === patientUuid) {
-                        // If clicking the same patient, hide chat
                         chatSection.classList.add('hidden');
                         activeChatPatientUuid = null;
-                        chatMessagesDiv.innerHTML = ''; // Clear chat history
+                        chatMessagesDiv.innerHTML = '';
                     } else {
-                        // Switch to new patient chat
                         activeChatPatientUuid = patientUuid;
                         chatPatientNameSpan.textContent = patientName;
-                        chatMessagesDiv.innerHTML = ''; // Clear previous chat history
+                        chatMessagesDiv.innerHTML = '';
                         chatSection.classList.remove('hidden');
                         chatInput.focus();
-                        // Clear unread messages for this patient when chat is opened
                         unreadMessages[patientUuid] = 0;
                         updateChatAlert(patientUuid);
-
-                        // Load and display chat history for the newly active patient
                         const history = patientChatHistories[patientUuid] || [];
                         history.forEach(msg => {
-                            // Use a helper function to append messages without triggering unread logic
                             appendMessageToChatDiv(msg.sender, msg.message);
                         });
                     }
+                    whiteboardSection.classList.add('hidden');
+                    activeWhiteboardPatientUuid = null;
+                    // When switching to chat, explicitly tell the server whiteboard is inactive for this patient
+                    if (chatSocket.readyState === WebSocket.OPEN && patientUuid) {
+                        chatSocket.send(JSON.stringify({
+                            'type': 'whiteboard_toggle',
+                            'patient_uuid': patientUuid,
+                            'is_active': false
+                        }));
+                    }
+                };
+            });
+
+            document.querySelectorAll('.whiteboard-toggle-button').forEach(button => {
+                button.onclick = function() {
+                    const patientUuid = this.dataset.patientUuid;
+                    const patientName = this.dataset.patientName;
+
+                    if (activeWhiteboardPatientUuid === patientUuid) {
+                        whiteboardSection.classList.add('hidden');
+                        activeWhiteboardPatientUuid = null;
+                        // When closing whiteboard, explicitly tell the server it's inactive
+                        if (chatSocket.readyState === WebSocket.OPEN && patientUuid) {
+                            chatSocket.send(JSON.stringify({
+                                'type': 'whiteboard_toggle',
+                                'patient_uuid': patientUuid,
+                                'is_active': false
+                            }));
+                        }
+                    } else {
+                        activeWhiteboardPatientUuid = patientUuid;
+                        whiteboardPatientNameSpan.textContent = patientName;
+                        whiteboardSection.classList.remove('hidden');
+                        ctx.clearRect(0, 0, whiteboardCanvas.width, whiteboardCanvas.height);
+                        resizeCanvas();
+                        // When opening whiteboard, explicitly tell the server it's active and request history
+                        if (chatSocket.readyState === WebSocket.OPEN && patientUuid) {
+                            chatSocket.send(JSON.stringify({
+                                'type': 'whiteboard_toggle',
+                                'patient_uuid': patientUuid,
+                                'is_active': true
+                            }));
+                            chatSocket.send(JSON.stringify({
+                                'type': 'request_whiteboard_history',
+                                'patient_uuid': patientUuid
+                            }));
+                        }
+                    }
+                    chatSection.classList.add('hidden');
+                    activeChatPatientUuid = null;
+                    chatMessagesDiv.innerHTML = '';
                 };
             });
         }
 
-        // Helper function to append messages to the chat div
         function appendMessageToChatDiv(sender, message) {
             const messageElement = document.createElement('div');
             messageElement.className = 'p-2 rounded-lg';
 
-            // Regex to find URLs
             const urlRegex = /(https?:\/\/[^\s]+)/g;
             let formattedMessage = message.replace(urlRegex, (url) => {
                 return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline">${url}</a>`;
@@ -408,7 +519,6 @@
             chatMessagesDiv.appendChild(messageElement);
             chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight;
         }
-
 
         addPatientBtn.onclick = function() {
             const patientName = newPatientNameInput.value.trim();
@@ -430,6 +540,153 @@
                 );
             } else {
                 showCustomModal('Input Required', 'Please enter a patient name.');
+            }
+        };
+
+        function resizeCanvas() {
+            const rect = whiteboardCanvas.getBoundingClientRect();
+            whiteboardCanvas.width = rect.width;
+            whiteboardCanvas.height = rect.height;
+            ctx.clearRect(0, 0, whiteboardCanvas.width, whiteboardCanvas.height);
+            if (activeWhiteboardPatientUuid && chatSocket.readyState === WebSocket.OPEN) {
+                 chatSocket.send(JSON.stringify({
+                    'type': 'request_whiteboard_history',
+                    'patient_uuid': activeWhiteboardPatientUuid
+                }));
+            }
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+
+        whiteboardCanvas.addEventListener('mousedown', (e) => {
+            if (!activeWhiteboardPatientUuid) return;
+            isDrawing = true;
+            [lastX, lastY] = [e.offsetX, e.offsetY];
+            sendDrawingData('start', lastX, lastY, drawColor);
+        });
+
+        whiteboardCanvas.addEventListener('mousemove', (e) => {
+            if (!isDrawing || !activeWhiteboardPatientUuid) return;
+            sendDrawingData('draw', e.offsetX, e.offsetY, drawColor);
+            draw(e.offsetX, e.offsetY, drawColor, lastX, lastY);
+            [lastX, lastY] = [e.offsetX, e.offsetY];
+        });
+
+        whiteboardCanvas.addEventListener('mouseup', () => {
+            isDrawing = false;
+            if (activeWhiteboardPatientUuid) {
+                sendDrawingData('end');
+            }
+        });
+
+        whiteboardCanvas.addEventListener('mouseout', () => {
+            if (isDrawing) {
+                isDrawing = false;
+                if (activeWhiteboardPatientUuid) {
+                    sendDrawingData('end');
+                }
+            }
+        });
+
+        // Touch events for drawing
+        whiteboardCanvas.addEventListener('touchstart', (e) => {
+            if (!activeWhiteboardPatientUuid) return;
+            e.preventDefault();
+            const touch = e.touches[0];
+            const rect = whiteboardCanvas.getBoundingClientRect();
+            lastX = touch.clientX - rect.left;
+            lastY = touch.clientY - rect.top;
+            isDrawing = true;
+            sendDrawingData('start', lastX, lastY, drawColor);
+        });
+
+        whiteboardCanvas.addEventListener('touchmove', (e) => {
+            if (!isDrawing || !activeWhiteboardPatientUuid) return;
+            e.preventDefault();
+            const touch = e.touches[0];
+            const rect = whiteboardCanvas.getBoundingClientRect();
+            const currentX = touch.clientX - rect.left;
+            const currentY = touch.clientY - rect.top;
+            sendDrawingData('draw', currentX, currentY, drawColor);
+            draw(currentX, currentY, drawColor, lastX, lastY);
+            lastX = currentX;
+            lastY = currentY;
+        });
+
+        whiteboardCanvas.addEventListener('touchend', () => {
+            isDrawing = false;
+            if (activeWhiteboardPatientUuid) {
+                sendDrawingData('end');
+            }
+        });
+
+
+        function draw(x, y, color, prevX, prevY) {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(prevX, prevY);
+            ctx.lineTo(x, y);
+            ctx.stroke();
+        }
+
+        function drawOnCanvas(data) {
+            if (data.type === 'start') {
+                ctx.strokeStyle = data.color;
+                ctx.lineWidth = 2;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.moveTo(data.x, data.y);
+                lastX = data.x;
+                lastY = data.y;
+            } else if (data.type === 'draw') {
+                ctx.strokeStyle = data.color;
+                ctx.lineWidth = 2;
+                ctx.lineCap = 'round';
+                ctx.lineTo(data.x, data.y);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(data.x, data.y);
+                lastX = data.x;
+                lastY = data.y;
+            } else if (data.type === 'end') {
+                ctx.closePath();
+            } else if (data.type === 'clear') {
+                ctx.clearRect(0, 0, whiteboardCanvas.width, whiteboardCanvas.height);
+            }
+        }
+
+        function sendDrawingData(type, x = null, y = null, color = null) {
+            if (chatSocket.readyState === WebSocket.OPEN && activeWhiteboardPatientUuid) {
+                const data = {
+                    type: type,
+                    x: x,
+                    y: y,
+                    color: color
+                };
+                chatSocket.send(JSON.stringify({
+                    'type': 'drawing_data',
+                    'data': data,
+                    'patient_uuid': activeWhiteboardPatientUuid
+                }));
+            }
+        }
+
+        // Color selection for whiteboard
+        whiteboardColorButtons.forEach(button => {
+            button.onclick = function() {
+                drawColor = this.dataset.color;
+                whiteboardColorButtons.forEach(btn => btn.classList.remove('border-blue-500', 'border-4'));
+                this.classList.add('border-blue-500', 'border-4');
+            };
+        });
+
+        // Clear whiteboard button
+        clearWhiteboardBtn.onclick = function() {
+            if (activeWhiteboardPatientUuid) {
+                ctx.clearRect(0, 0, whiteboardCanvas.width, whiteboardCanvas.height);
+                sendDrawingData('clear');
             }
         };
 

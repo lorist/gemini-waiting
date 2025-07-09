@@ -34,6 +34,7 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
         logger.info(f"[Consumer] WebSocket disconnected for doctor {self.doctor_id} with code {close_code}")
 
         # If this consumer was associated with a patient, update their status to 'Left Call'
+        # This handles unexpected disconnects (e.g., browser crash, tab close without clicking button)
         if self.patient_uuid:
             logger.info(f"[Consumer] Patient {self.patient_uuid} disconnected. Updating status to 'Left Call'.")
             # Call the async database function to update the status
@@ -110,6 +111,39 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
                     'patient_uuid': patient_uuid
                 }
             )
+        elif message_type == 'leave_queue':
+            patient_uuid_to_remove = text_data_json.get('patient_uuid')
+            doctor_id_for_removal = text_data_json.get('doctor_id')
+            logger.info(f"[Consumer] Patient {patient_uuid_to_remove} explicitly leaving queue for doctor {doctor_id_for_removal}.")
+            await self._mark_patient_as_cancelled(patient_uuid_to_remove, doctor_id_for_removal)
+        elif message_type == 'drawing_data':
+            drawing_data = text_data_json.get('data')
+            patient_uuid_for_drawing = text_data_json.get('patient_uuid')
+            logger.debug(f"[Consumer] Received drawing data for patient {patient_uuid_for_drawing}: {drawing_data}")
+            await self.channel_layer.group_send(
+                self.doctor_group_name,
+                {
+                    'type': 'send_drawing_data',
+                    'data': drawing_data,
+                    'patient_uuid': patient_uuid_for_drawing
+                }
+            )
+        elif message_type == 'whiteboard_toggle': # NEW: Handle whiteboard toggle from client
+            patient_uuid_toggle = text_data_json.get('patient_uuid')
+            is_active = text_data_json.get('is_active')
+            logger.info(f"[Consumer] Whiteboard toggle for patient {patient_uuid_toggle}: active={is_active}")
+            await self._update_whiteboard_active_status(patient_uuid_toggle, is_active)
+            # No need to send waiting_list_update here, as _update_whiteboard_active_status already does it.
+        elif message_type == 'request_whiteboard_history': # NEW: Handle request for whiteboard history
+            patient_uuid_history = text_data_json.get('patient_uuid')
+            logger.info(f"[Consumer] Request for whiteboard history for patient {patient_uuid_history}.")
+            whiteboard_data = await self._get_whiteboard_data(patient_uuid_history)
+            await self.send(text_data=json.dumps({
+                'type': 'whiteboard_history',
+                'patient_uuid': patient_uuid_history,
+                'data': whiteboard_data
+            }))
+
 
     async def waiting_list_update(self, event):
         logger.info(f"[Consumer] Received 'waiting_list_update' event in group for doctor {self.doctor_id}.")
@@ -123,6 +157,15 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
             'patient_uuid': event['patient_uuid']
         }))
         logger.info(f"[Consumer] Sent chat message to client: {event['sender']} - {event['message']}")
+
+    async def send_drawing_data(self, event):
+        await self.send(text_data=json.dumps({
+            'type': 'drawing_data',
+            'data': event['data'],
+            'patient_uuid': event['patient_uuid']
+        }))
+        logger.debug(f"[Consumer] Sent drawing data to client for patient {event['patient_uuid']}.")
+
 
     @sync_to_async
     def _generate_unique_pin(self):
@@ -154,6 +197,7 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
                     'host_pin': entry.host_pin,
                     'guest_pin': entry.guest_pin,
                     'added_by_doctor': entry.added_by_doctor,
+                    'whiteboard_active': entry.whiteboard_active, # NEW: Include whiteboard_active status
                 })
             logger.info(f"[Consumer] Fetched waiting list data for doctor {self.doctor_id}: {len(data)} entries.")
             return data
@@ -188,32 +232,135 @@ class WaitingRoomConsumer(AsyncWebsocketConsumer):
     def update_patient_status_on_disconnect(self, patient_uuid_str):
         """
         Updates a patient's WaitingRoomEntry status to 'Left Call' when their WebSocket disconnects.
+        This is for unexpected disconnections.
         """
         try:
-            # Find the WaitingRoomEntry for the given patient_uuid and doctor_id
-            # Ensure it's not already in a 'Done' or 'Cancelled' state
             entry = WaitingRoomEntry.objects.select_related('patient').get(
                 patient__uuid=patient_uuid_str,
-                doctor_id=self.doctor_id, # Ensure it's for the correct doctor
-                status__in=['Waiting', 'In Progress', 'In Call'] # Only update if active
+                doctor_id=self.doctor_id,
+                status__in=['Waiting', 'In Progress', 'In Call']
             )
             entry.status = 'Left Call'
             entry.save()
             logger.info(f"[Consumer] Patient {patient_uuid_str} status updated to 'Left Call' on disconnect.")
 
-            # Notify the doctor's dashboard about the change
             channel_layer = get_channel_layer()
             async_to_sync(channel_layer.group_send)(
-                self.doctor_group_name, # Corrected: Use self.doctor_group_name
+                self.doctor_group_name,
                 {
                     'type': 'waiting_list_update',
-                    'message': f'Patient {entry.patient.name} left the queue.'
+                    'message': f'Patient {entry.patient.name} left the queue unexpectedly.'
                 }
             )
         except WaitingRoomEntry.DoesNotExist:
             logger.info(f"[Consumer] No active WaitingRoomEntry found for patient {patient_uuid_str} on disconnect, or already handled.")
         except Exception as e:
             logger.error(f"[Consumer] Error updating patient {patient_uuid_str} status on disconnect: {e}", exc_info=True)
+
+    @sync_to_async
+    def _mark_patient_as_cancelled(self, patient_uuid_str, doctor_id_str):
+        """
+        Marks a patient's WaitingRoomEntry status as 'Cancelled' when they explicitly leave the queue.
+        """
+        try:
+            entry = WaitingRoomEntry.objects.select_related('patient').get(
+                patient__uuid=patient_uuid_str,
+                doctor_id=doctor_id_str, # Use the doctor_id from the message
+                status__in=['Waiting', 'In Progress', 'In Call']
+            )
+            entry.status = 'Cancelled'
+            entry.save()
+            logger.info(f"[Consumer] Patient {patient_uuid_str} explicitly marked as 'Cancelled' for doctor {doctor_id_str}.")
+
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                self.doctor_group_name,
+                {
+                    'type': 'waiting_list_update',
+                    'message': f'Patient {entry.patient.name} explicitly left the queue.'
+                }
+            )
+        except WaitingRoomEntry.DoesNotExist:
+            logger.info(f"[Consumer] No active WaitingRoomEntry found for patient {patient_uuid_str} to cancel, or already handled.")
+        except Exception as e:
+            logger.error(f"[Consumer] Error marking patient {patient_uuid_str} as cancelled: {e}", exc_info=True)
+
+    @sync_to_async
+    def _update_whiteboard_active_status(self, patient_uuid_str, is_active):
+        """
+        Updates the whiteboard_active status for a given patient.
+        """
+        try:
+            entry = WaitingRoomEntry.objects.get(patient__uuid=patient_uuid_str, doctor_id=self.doctor_id)
+            entry.whiteboard_active = is_active
+            entry.save()
+            logger.info(f"[Consumer] Whiteboard active status for patient {patient_uuid_str} set to {is_active}.")
+            # Notify the doctor's dashboard about the change
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                self.doctor_group_name,
+                {
+                    'type': 'waiting_list_update', # Trigger a waiting list update to refresh badge
+                    'message': f'Whiteboard status changed for patient {entry.patient.name}.'
+                }
+            )
+        except WaitingRoomEntry.DoesNotExist:
+            logger.warning(f"[Consumer] WaitingRoomEntry for patient {patient_uuid_str} not found for whiteboard status update.")
+        except Exception as e:
+            logger.error(f"[Consumer] Error updating whiteboard active status for patient {patient_uuid_str}: {e}", exc_info=True)
+
+    @sync_to_async
+    def _get_whiteboard_data(self, patient_uuid_str):
+        """
+        Retrieves the whiteboard_data for a given patient.
+        """
+        try:
+            entry = WaitingRoomEntry.objects.get(patient__uuid=patient_uuid_str, doctor_id=self.doctor_id)
+            return json.loads(entry.whiteboard_data)
+        except WaitingRoomEntry.DoesNotExist:
+            logger.warning(f"[Consumer] WaitingRoomEntry for patient {patient_uuid_str} not found for whiteboard data retrieval.")
+            return []
+        except json.JSONDecodeError:
+            logger.error(f"[Consumer] Error decoding whiteboard_data for patient {patient_uuid_str}. Data: {entry.whiteboard_data}", exc_info=True)
+            return []
+        except Exception as e:
+            logger.error(f"[Consumer] Error getting whiteboard data for patient {patient_uuid_str}: {e}", exc_info=True)
+            return []
+
+    @sync_to_async
+    def _save_whiteboard_data(self, patient_uuid_str, drawing_data):
+        """
+        Saves the current whiteboard drawing data for a given patient.
+        This will append new drawing commands to the existing data.
+        """
+        try:
+            entry = WaitingRoomEntry.objects.get(patient__uuid=patient_uuid_str, doctor_id=self.doctor_id)
+            current_data = json.loads(entry.whiteboard_data)
+            current_data.append(drawing_data)
+            entry.whiteboard_data = json.dumps(current_data)
+            entry.save()
+            logger.debug(f"[Consumer] Saved drawing data for patient {patient_uuid_str}.")
+        except WaitingRoomEntry.DoesNotExist:
+            logger.warning(f"[Consumer] WaitingRoomEntry for patient {patient_uuid_str} not found for saving whiteboard data.")
+        except json.JSONDecodeError:
+            logger.error(f"[Consumer] Error decoding existing whiteboard_data for patient {patient_uuid_str} during save. Data: {entry.whiteboard_data}", exc_info=True)
+        except Exception as e:
+            logger.error(f"[Consumer] Error saving whiteboard data for patient {patient_uuid_str}: {e}", exc_info=True)
+
+    @sync_to_async
+    def _clear_whiteboard_data(self, patient_uuid_str):
+        """
+        Clears all whiteboard drawing data for a given patient.
+        """
+        try:
+            entry = WaitingRoomEntry.objects.get(patient__uuid=patient_uuid_str, doctor_id=self.doctor_id)
+            entry.whiteboard_data = '[]'
+            entry.save()
+            logger.info(f"[Consumer] Cleared whiteboard data for patient {patient_uuid_str}.")
+        except WaitingRoomEntry.DoesNotExist:
+            logger.warning(f"[Consumer] WaitingRoomEntry for patient {patient_uuid_str} not found for clearing whiteboard data.")
+        except Exception as e:
+            logger.error(f"[Consumer] Error clearing whiteboard data for patient {patient_uuid_str}: {e}", exc_info=True)
 
 
     async def add_patient_to_waiting_room(self, patient_name, patient_uuid):

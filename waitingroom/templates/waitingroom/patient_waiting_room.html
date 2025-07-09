@@ -43,8 +43,17 @@
             <p class="text-xs text-gray-400 mt-2 text-center">Your ID: <span id="myPatientUuid"></span></p>
             <p class="text-sm text-gray-600 mt-2 text-center" id="myGuestPinDisplay">Guest PIN: <span class="font-bold"></span></p>
 
+            <div class="flex flex-wrap justify-center sm:justify-end gap-2 mt-4">
+                <button id="patientChatToggleButton" class="bg-green-500 text-white px-4 py-2 rounded-md font-semibold hover:bg-green-600 transition duration-200 ease-in-out shadow-md relative">
+                    Chat
+                    <span id="patientChatAlertBadge" class="absolute top-0 right-0 -mt-1 -mr-1 bg-red-500 text-white text-xs font-bold px-2 py-1 rounded-full hidden"></span>
+                </button>
+                {# Leave Queue Button #}
+                <button id="leaveQueueBtn" class="bg-red-600 text-white px-6 py-3 rounded-md font-semibold hover:bg-red-700 transition duration-200 ease-in-out shadow-md">Leave Queue</button>
+            </div>
+
             <!-- Chat Section for Patient -->
-            <div id="patientChatSection" class="mt-8 p-4 bg-gray-50 rounded-md">
+            <div id="patientChatSection" class="mt-8 p-4 bg-gray-50 rounded-md hidden"> {# Added hidden class #}
                 <h3 class="text-xl font-bold text-gray-800 mb-3 text-center">Chat with Dr. <span id="chatDoctorName"></span></h3>
                 <div id="patientChatMessages" class="bg-white p-3 rounded-md h-48 overflow-y-auto mb-3 space-y-2 border border-gray-200">
                     <!-- Patient chat messages will appear here -->
@@ -55,8 +64,18 @@
                 </div>
             </div>
 
-            {# NEW: Leave Queue Button #}
-            <button id="leaveQueueBtn" class="mt-6 w-full bg-red-600 text-white px-6 py-3 rounded-md font-semibold hover:bg-red-700 transition duration-200 ease-in-out shadow-md">Leave Queue</button>
+            <!-- NEW: Whiteboard Section for Patient -->
+            <div id="patientWhiteboardSection" class="mt-8 p-4 bg-gray-50 rounded-md hidden">
+                <h3 class="text-xl font-bold text-gray-800 mb-3 text-center">Shared Whiteboard with Dr. <span id="whiteboardDoctorName"></span></h3>
+                <div class="flex flex-wrap gap-2 mb-4 justify-center">
+                    <button class="patient-whiteboard-color-button w-8 h-8 rounded-full border-2 border-gray-300" style="background-color: black;" data-color="black"></button>
+                    <button class="patient-whiteboard-color-button w-8 h-8 rounded-full border-2 border-gray-300" style="background-color: red;" data-color="red"></button>
+                    <button class="patient-whiteboard-color-button w-8 h-8 rounded-full border-2 border-gray-300" style="background-color: blue;" data-color="blue"></button>
+                    <button class="patient-whiteboard-color-button w-8 h-8 rounded-full border-2 border-gray-300" style="background-color: green;" data-color="green"></button>
+                    <button id="clearPatientWhiteboardBtn" class="bg-gray-200 text-gray-800 px-4 py-2 rounded-md font-semibold hover:bg-gray-300 transition duration-200">Clear</button>
+                </div>
+                <canvas id="patientWhiteboardCanvas" class="border border-gray-300 rounded-md bg-white w-full" style="aspect-ratio: 16 / 9;"></canvas>
+            </div>
 
         </div>
 
@@ -103,9 +122,23 @@
         const patientChatMessagesDiv = document.getElementById('patientChatMessages');
         const patientChatInput = document.getElementById('patientChatInput');
         const sendPatientChatBtn = document.getElementById('sendPatientChatBtn');
+        const patientChatToggleButton = document.getElementById('patientChatToggleButton'); // NEW: Chat toggle button
+        const patientChatAlertBadge = document.getElementById('patientChatAlertBadge'); // NEW: Chat alert badge
 
-        // NEW: Leave Queue Button element
+        // Leave Queue Button element
         const leaveQueueBtn = document.getElementById('leaveQueueBtn');
+
+        // Whiteboard elements for patient
+        const patientWhiteboardSection = document.getElementById('patientWhiteboardSection');
+        const whiteboardDoctorNameSpan = document.getElementById('whiteboardDoctorName');
+        const patientWhiteboardCanvas = document.getElementById('patientWhiteboardCanvas');
+        const clearPatientWhiteboardBtn = document.getElementById('clearPatientWhiteboardBtn');
+        const patientWhiteboardColorButtons = document.querySelectorAll('.patient-whiteboard-color-button');
+        let patientCtx = patientWhiteboardCanvas.getContext('2d');
+        let isPatientDrawing = false;
+        let lastPatientX = 0;
+        let lastPatientY = 0;
+        let patientDrawColor = 'black'; // Default drawing color
 
 
         let patientSocket = null;
@@ -116,6 +149,10 @@
         let currentGuestPin = '';
         let currentHostPin = '';
         let hasJoinedConfirmed = false;
+        let isPexipModalShown = false; // Flag to control Pexip modal display
+        let lastPatientStatus = ''; // Track last status to prevent redundant whiteboard toggles
+        let patientUnreadMessages = 0; // NEW: Unread message count for patient
+        let isPatientChatOpen = false; // NEW: Track if patient chat is currently open
 
         // Pexip settings passed from Django context
         const PEXIP_ADDRESS = "{{ pexip_address }}";
@@ -190,7 +227,8 @@
             }
         }
 
-        function updatePatientStatusUI(status) {
+        // Modified to accept isWhiteboardActive
+        function updatePatientStatusUI(status, isWhiteboardActive = false) {
             myStatusSpan.textContent = status;
             myStatusSpan.className = 'py-2 px-4 rounded-full text-lg font-bold'; // Reset classes
             statusMessageP.textContent = `Your status was last updated at ${new Date().toLocaleTimeString()}.`;
@@ -200,41 +238,114 @@
                 myStatusSpan.classList.add('bg-yellow-300', 'text-yellow-800');
                 statusMessageP.textContent = `You are currently waiting in the queue.`;
                 myGuestPinDisplay.classList.add('hidden'); // Hide guest PIN
-                patientChatSection.classList.remove('hidden'); // Show chat section
+                // patientChatSection.classList.remove('hidden'); // Chat visibility now controlled by button
+                patientWhiteboardSection.classList.add('hidden'); // Hide whiteboard until In Progress
+
+                // If status changed from active to Waiting, send whiteboard_toggle: false
+                if (lastPatientStatus === 'In Progress' || lastPatientStatus === 'In Call') {
+                    if (patientSocket && patientSocket.readyState === WebSocket.OPEN) {
+                        patientSocket.send(JSON.stringify({
+                            'type': 'whiteboard_toggle',
+                            'patient_uuid': currentPatientUuid,
+                            'is_active': false
+                        }));
+                    }
+                }
+                // Reset Pexip modal flag when status is no longer active
+                isPexipModalShown = false;
+
             } else if (status === 'In Progress') {
                 myStatusSpan.classList.add('bg-blue-300', 'text-blue-800');
                 myGuestPinDisplay.querySelector('span').textContent = currentGuestPin;
                 myGuestPinDisplay.classList.remove('hidden'); // Show guest PIN
                 statusMessageP.textContent = `You are currently being seen by the doctor. Please join the call.`;
-                patientChatSection.classList.remove('hidden'); // Show chat section
+                // patientChatSection.classList.remove('hidden'); // Chat visibility now controlled by button
 
-                showCustomModal(
-                    'Join Doctor\'s Room',
-                    `Your appointment is now in progress.  Would you like to join the doctor\'s virtual room?`,
-                    () => {
-                        const pexipUrl = `https://${PEXIP_ADDRESS}/${PEXIP_PATH}/m/?conference=${currentPatientUuid}&name=${encodeURIComponent(currentPatientName)}&role=guest&pin=${currentGuestPin}`;
-                        window.open(pexipUrl, '_blank');
-                        statusMessageP.textContent = `You are in the call with Dr. ${currentDoctorName}.`;
-                    },
-                    () => {
-                        statusMessageP.textContent = `You chose not to join the call at this time. Please wait for further instructions.`;
-                    },
-                    'Join Call',
-                    'Later'
-                );
-            } else if (status === 'In Call') { // NEW: Handle 'In Call' status
+                // Control whiteboard visibility based on isWhiteboardActive
+                if (isWhiteboardActive) {
+                    patientWhiteboardSection.classList.remove('hidden'); // Show whiteboard section
+                    resizePatientCanvas(); // Ensure canvas is sized correctly when it becomes visible
+                } else {
+                    patientWhiteboardSection.classList.add('hidden'); // Hide whiteboard section
+                }
+
+
+                // Only show Pexip modal if it hasn't been shown for this 'In Progress' state
+                if (!isPexipModalShown) {
+                    showCustomModal(
+                        'Join Doctor\'s Room',
+                        `Your appointment is now in progress.  Would you like to join the doctor\'s virtual room?`,
+                        () => {
+                            const pexipUrl = `https://${PEXIP_ADDRESS}/${PEXIP_PATH}/m/?conference=${currentPatientUuid}&name=${encodeURIComponent(currentPatientName)}&role=guest&pin=${currentGuestPin}`;
+                            window.open(pexipUrl, '_blank');
+                            statusMessageP.textContent = `You are in the call with Dr. ${currentDoctorName}.`;
+                            // isPexipModalShown remains true until status changes away from active
+                        },
+                        () => {
+                            statusMessageP.textContent = `You chose not to join the call at this time. Please wait for further instructions.`;
+                            // isPexipModalShown remains true until status changes away from active
+                        },
+                        'Join Call',
+                        'Later'
+                    );
+                    isPexipModalShown = true;
+                }
+
+                // If status changed to In Progress from non-active, send whiteboard_toggle: true and request history
+                // This part should only run if the whiteboard is actually becoming active due to doctor's action
+                if (!(lastPatientStatus === 'In Progress' || lastPatientStatus === 'In Call') && isWhiteboardActive) {
+                    if (patientSocket && patientSocket.readyState === WebSocket.OPEN) {
+                        patientSocket.send(JSON.stringify({
+                            'type': 'whiteboard_toggle',
+                            'patient_uuid': currentPatientUuid,
+                            'is_active': true
+                        }));
+                        patientSocket.send(JSON.stringify({
+                            'type': 'request_whiteboard_history',
+                            'patient_uuid': currentPatientUuid
+                        }));
+                    }
+                }
+
+            } else if (status === 'In Call') {
                 myStatusSpan.classList.add('bg-green-500', 'text-white');
                 myGuestPinDisplay.querySelector('span').textContent = currentGuestPin;
                 myGuestPinDisplay.classList.remove('hidden');
                 statusMessageP.textContent = `You are currently in the call with Dr. ${currentDoctorName}.`;
-                patientChatSection.classList.remove('hidden'); // Show chat section
+                // patientChatSection.classList.remove('hidden'); // Chat visibility now controlled by button
+
+                // Control whiteboard visibility based on isWhiteboardActive
+                if (isWhiteboardActive) {
+                    patientWhiteboardSection.classList.remove('hidden'); // Show whiteboard section
+                    resizePatientCanvas(); // Ensure canvas is sized correctly when it becomes visible
+                } else {
+                    patientWhiteboardSection.classList.add('hidden'); // Hide whiteboard section
+                }
+
+                // If status changed to In Call from non-active, send whiteboard_toggle: true and request history
+                // This part should only run if the whiteboard is actually becoming active due to doctor's action
+                if (!(lastPatientStatus === 'In Progress' || lastPatientStatus === 'In Call') && isWhiteboardActive) {
+                    if (patientSocket && patientSocket.readyState === WebSocket.OPEN) {
+                        patientSocket.send(JSON.stringify({
+                            'type': 'whiteboard_toggle',
+                            'patient_uuid': currentPatientUuid,
+                            'is_active': true
+                        }));
+                        patientSocket.send(JSON.stringify({
+                            'type': 'request_whiteboard_history',
+                            'patient_uuid': currentPatientUuid
+                        }));
+                    }
+                }
                 // No modal here, as they are already in the call
+                isPexipModalShown = true; // Mark as shown if they are in call
             }
             else if (status === 'Done') {
                 myStatusSpan.classList.add('bg-green-300', 'text-green-800');
                 statusMessageP.textContent = `Your appointment is complete.`;
                 myGuestPinDisplay.classList.add('hidden');
                 patientChatSection.classList.add('hidden'); // Hide chat section
+                patientWhiteboardSection.classList.add('hidden');
                 showCustomModal(
                     'Appointment Complete',
                     'Your appointment has been marked as complete. You will now be redirected to the join page.',
@@ -244,11 +355,23 @@
                         window.location.href = '/join-queue/';
                     }
                 );
-            } else if (status === 'Cancelled' || status === 'Left Call') { // NEW: Handle 'Left Call' status
+                // If status changed from active to Done, send whiteboard_toggle: false
+                if (lastPatientStatus === 'In Progress' || lastPatientStatus === 'In Call') {
+                    if (patientSocket && patientSocket.readyState === WebSocket.OPEN) {
+                        patientSocket.send(JSON.stringify({
+                            'type': 'whiteboard_toggle',
+                            'patient_uuid': currentPatientUuid,
+                            'is_active': false
+                        }));
+                    }
+                }
+                isPexipModalShown = false; // Reset Pexip modal flag
+            } else if (status === 'Cancelled' || status === 'Left Call') {
                 myStatusSpan.classList.add('bg-red-300', 'text-red-800');
                 statusMessageP.textContent = `Your appointment has ended or been cancelled.`;
                 myGuestPinDisplay.classList.add('hidden');
                 patientChatSection.classList.add('hidden'); // Hide chat section
+                patientWhiteboardSection.classList.add('hidden');
                 showCustomModal(
                     'Appointment Ended',
                     'Your appointment has ended or been cancelled. You will now be redirected to the join page.',
@@ -258,41 +381,76 @@
                         window.location.href = '/join-queue/';
                     }
                 );
+                // If status changed from active to Cancelled/Left Call, send whiteboard_toggle: false
+                if (lastPatientStatus === 'In Progress' || lastPatientStatus === 'In Call') {
+                    if (patientSocket && patientSocket.readyState === WebSocket.OPEN) {
+                        patientSocket.send(JSON.stringify({
+                            'type': 'whiteboard_toggle',
+                            'patient_uuid': currentPatientUuid,
+                            'is_active': false
+                        }));
+                    }
+                }
+                isPexipModalShown = false; // Reset Pexip modal flag
             } else {
                 myStatusSpan.classList.add('bg-gray-300', 'text-gray-800');
                 myGuestPinDisplay.classList.add('hidden');
                 patientChatSection.classList.add('hidden'); // Hide chat section
+                patientWhiteboardSection.classList.add('hidden');
+                isPexipModalShown = false; // Reset Pexip modal flag
+            }
+            lastPatientStatus = status; // Update last status
+        }
+
+        // NEW: Function to update the patient chat alert badge
+        function updatePatientChatAlert() {
+            if (patientUnreadMessages > 0) {
+                patientChatAlertBadge.textContent = patientUnreadMessages;
+                patientChatAlertBadge.classList.remove('hidden');
+            } else {
+                patientChatAlertBadge.classList.add('hidden');
             }
         }
 
         function displayPatientChatMessage(sender, message, patientUuid) {
-            // Check if the message is for this patient (based on their UUID)
             if (currentPatientUuid === patientUuid) {
-                // Use the helper function to append messages, which now handles link detection
+                // If message is from doctor and chat is currently hidden, open it
+                if (sender !== currentPatientName && patientChatSection.classList.contains('hidden')) {
+                    patientChatSection.classList.remove('hidden');
+                    isPatientChatOpen = true;
+                    // Increment unread messages only if the chat is not currently open
+                    patientUnreadMessages++;
+                    updatePatientChatAlert();
+                } else if (sender !== currentPatientName && isPatientChatOpen) {
+                    // If chat is open and message is from doctor, no unread message increment
+                } else if (sender === currentPatientName && !isPatientChatOpen) {
+                    // If message is from patient themselves and chat is closed, open it
+                    patientChatSection.classList.remove('hidden');
+                    isPatientChatOpen = true;
+                }
+
                 appendMessageToPatientChatDiv(sender, message);
             }
         }
 
-        // Helper function to append messages to the patient chat div, with link detection
         function appendMessageToPatientChatDiv(sender, message) {
             const messageElement = document.createElement('div');
             messageElement.className = 'p-2 rounded-lg';
 
-            // Regex to find URLs
             const urlRegex = /(https?:\/\/[^\s]+)/g;
             let formattedMessage = message.replace(urlRegex, (url) => {
                 return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline">${url}</a>`;
             });
 
-            if (sender === currentPatientName) { // Message sent by patient themselves
+            if (sender === currentPatientName) {
                 messageElement.classList.add('bg-blue-200', 'self-end', 'text-right');
                 messageElement.innerHTML = `<span class="font-bold">You:</span> ${formattedMessage}`;
-            } else { // Message sent by doctor (or other participant, though unlikely in this setup)
+            } else {
                 messageElement.classList.add('bg-gray-200', 'self-start');
                 messageElement.innerHTML = `<span class="font-bold">${sender}:</span> ${formattedMessage}`;
             }
             patientChatMessagesDiv.appendChild(messageElement);
-            patientChatMessagesDiv.scrollTop = patientChatMessagesDiv.scrollHeight; // Scroll to bottom
+            patientChatMessagesDiv.scrollTop = patientChatMessagesDiv.scrollHeight;
         }
 
 
@@ -303,9 +461,9 @@
                     'type': 'chat_message',
                     'sender': currentPatientName,
                     'message': message,
-                    'patient_uuid': currentPatientUuid // Send patient UUID with message
+                    'patient_uuid': currentPatientUuid
                 }));
-                patientChatInput.value = ''; // Clear input
+                patientChatInput.value = '';
             }
         };
 
@@ -315,6 +473,32 @@
             }
         });
 
+        // NEW: Event listener for the patient chat toggle button
+        patientChatToggleButton.onclick = function() {
+            // Toggle chat section visibility
+            patientChatSection.classList.toggle('hidden');
+            isPatientChatOpen = !patientChatSection.classList.contains('hidden');
+
+            // If chat is now open, clear unread messages
+            if (isPatientChatOpen) {
+                patientUnreadMessages = 0;
+                updatePatientChatAlert();
+                patientChatMessagesDiv.scrollTop = patientChatMessagesDiv.scrollHeight; // Scroll to bottom
+                patientChatInput.focus(); // Focus input
+            }
+
+            // Also hide whiteboard if chat is opened
+            patientWhiteboardSection.classList.add('hidden');
+            // If whiteboard was active, send toggle off
+            if (patientSocket && patientSocket.readyState === WebSocket.OPEN && currentPatientUuid) {
+                patientSocket.send(JSON.stringify({
+                    'type': 'whiteboard_toggle',
+                    'patient_uuid': currentPatientUuid,
+                    'is_active': false
+                }));
+            }
+        };
+
 
         function connectPatientWebSocket() {
             joinFormSection.classList.add('hidden');
@@ -322,8 +506,9 @@
             myPatientNameSpan.textContent = currentPatientName;
             myDoctorNameSpan.textContent = currentDoctorName;
             myPatientUuidSpan.textContent = currentPatientUuid;
-            chatDoctorNameSpan.textContent = currentDoctorName; // Set doctor name for chat
-            updatePatientStatusUI('Waiting');
+            chatDoctorNameSpan.textContent = currentDoctorName;
+            whiteboardDoctorNameSpan.textContent = currentDoctorName;
+            updatePatientStatusUI('Waiting'); // Initial status
 
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = `${protocol}//${window.location.host}/ws/waiting_room/${currentDoctorId}/`;
@@ -338,6 +523,7 @@
                 }));
                 displayMessage(`You have joined Dr. ${currentDoctorName}'s queue.`, 'success');
                 savePatientData();
+                resizePatientCanvas();
             };
 
             patientSocket.onmessage = function(e) {
@@ -354,17 +540,29 @@
                         hasJoinedConfirmed = true;
                         currentGuestPin = myEntry.guest_pin;
                         currentHostPin = myEntry.host_pin;
-                        updatePatientStatusUI(myEntry.status);
+                        // Pass whiteboard_active status from the entry to updatePatientStatusUI
+                        updatePatientStatusUI(myEntry.status, myEntry.whiteboard_active);
+
                     } else {
-                        // If patient entry is no longer in the active list (e.g., Done, Cancelled, Left Call)
                         if (hasJoinedConfirmed) {
                             if (myStatusSpan.textContent === 'Waiting' || myStatusSpan.textContent === 'In Progress' || myStatusSpan.textContent === 'In Call') {
-                                updatePatientStatusUI('Done'); // Default to Done if entry not found
+                                updatePatientStatusUI('Done');
                             }
                         }
                     }
-                } else if (data.type === 'chat_message') { // NEW: Handle incoming chat messages
+                } else if (data.type === 'chat_message') {
                     displayPatientChatMessage(data.sender, data.message, data.patient_uuid);
+                } else if (data.type === 'drawing_data') {
+                    if (currentPatientUuid === data.patient_uuid) {
+                        drawOnPatientCanvas(data.data);
+                    }
+                } else if (data.type === 'whiteboard_history') {
+                    if (currentPatientUuid === data.patient_uuid) {
+                        patientCtx.clearRect(0, 0, patientWhiteboardCanvas.width, patientWhiteboardCanvas.height);
+                        data.data.forEach(drawingCommand => {
+                            drawOnPatientCanvas(drawingCommand);
+                        });
+                    }
                 } else if (data.type === 'error') {
                     showCustomModal('Error', data.message);
                 }
@@ -385,7 +583,6 @@
             };
         }
 
-        // NEW: Event listener for the Leave Queue button
         leaveQueueBtn.onclick = function() {
             showCustomModal(
                 'Confirm Leaving Queue',
@@ -399,7 +596,7 @@
                         }));
                     }
                     clearPatientData();
-                    window.location.href = '/join-queue/'; // Redirect immediately
+                    window.location.href = '/join-queue/';
                 },
                 () => {
                     console.log("Leaving queue cancelled.");
@@ -433,6 +630,10 @@
                     hasJoinedConfirmed = false;
                     currentGuestPin = '';
                     currentHostPin = '';
+                    isPexipModalShown = false; // Reset Pexip modal flag for new session
+                    lastPatientStatus = ''; // Reset last status for new session
+                    patientUnreadMessages = 0; // Reset unread messages
+                    isPatientChatOpen = false; // Reset chat open state
 
                     connectPatientWebSocket();
                     patientNameInput.value = '';
@@ -453,6 +654,11 @@
                 currentGuestPin = savedPatientData.guestPin || '';
                 currentHostPin = savedPatientData.hostPin || '';
                 hasJoinedConfirmed = true;
+                isPexipModalShown = false; // Reset for potential resume
+                lastPatientStatus = ''; // Reset for potential resume
+                patientUnreadMessages = 0; // Reset unread messages
+                isPatientChatOpen = false; // Reset chat open state
+
                 showCustomModal(
                     'Resume Session',
                     `Welcome back, ${currentPatientName}! Do you want to resume your session with Dr. ${currentDoctorName}?`,
@@ -468,5 +674,153 @@
                 joinFormSection.classList.remove('hidden');
             }
         });
+
+        // Patient Whiteboard Drawing Logic
+        function resizePatientCanvas() {
+            const rect = patientWhiteboardCanvas.getBoundingClientRect();
+            patientWhiteboardCanvas.width = rect.width;
+            patientWhiteboardCanvas.height = rect.height;
+            patientCtx.clearRect(0, 0, patientWhiteboardCanvas.width, patientWhiteboardCanvas.height);
+            // History is requested only on initial transition to In Progress/In Call.
+        }
+
+        window.addEventListener('resize', resizePatientCanvas);
+
+        patientWhiteboardCanvas.addEventListener('mousedown', (e) => {
+            if (!currentPatientUuid) return;
+            isPatientDrawing = true;
+            const rect = patientWhiteboardCanvas.getBoundingClientRect();
+            lastPatientX = e.clientX - rect.left;
+            lastPatientY = e.clientY - rect.top;
+            sendPatientDrawingData('start', lastPatientX, lastPatientY, patientDrawColor);
+        });
+
+        patientWhiteboardCanvas.addEventListener('mousemove', (e) => {
+            if (!isPatientDrawing || !currentPatientUuid) return;
+            const rect = patientWhiteboardCanvas.getBoundingClientRect();
+            const currentX = e.clientX - rect.left;
+            const currentY = e.clientY - rect.top;
+            sendPatientDrawingData('draw', currentX, currentY, patientDrawColor);
+            drawPatient(currentX, currentY, patientDrawColor, lastPatientX, lastPatientY);
+            lastPatientX = currentX;
+            lastPatientY = currentY;
+        });
+
+        patientWhiteboardCanvas.addEventListener('mouseup', () => {
+            isPatientDrawing = false;
+            if (currentPatientUuid) {
+                sendPatientDrawingData('end');
+            }
+        });
+
+        patientWhiteboardCanvas.addEventListener('mouseout', () => {
+            if (isPatientDrawing) {
+                isPatientDrawing = false;
+                if (currentPatientUuid) {
+                    sendPatientDrawingData('end');
+                }
+            }
+        });
+
+        // Touch events for patient drawing
+        patientWhiteboardCanvas.addEventListener('touchstart', (e) => {
+            if (!currentPatientUuid) return;
+            e.preventDefault(); // Prevent scrolling
+            const touch = e.touches[0];
+            const rect = patientWhiteboardCanvas.getBoundingClientRect();
+            lastPatientX = touch.clientX - rect.left;
+            lastPatientY = touch.clientY - rect.top;
+            isPatientDrawing = true;
+            sendPatientDrawingData('start', lastPatientX, lastPatientY, patientDrawColor);
+        });
+
+        patientWhiteboardCanvas.addEventListener('touchmove', (e) => {
+            if (!isPatientDrawing || !currentPatientUuid) return;
+            e.preventDefault(); // Prevent scrolling
+            const touch = e.touches[0];
+            const rect = patientWhiteboardCanvas.getBoundingClientRect();
+            const currentX = touch.clientX - rect.left;
+            const currentY = touch.clientY - rect.top;
+            sendPatientDrawingData('draw', currentX, currentY, patientDrawColor);
+            drawPatient(currentX, currentY, patientDrawColor, lastPatientX, lastPatientY);
+            lastPatientX = currentX;
+            lastPatientY = currentY;
+        });
+
+        patientWhiteboardCanvas.addEventListener('touchend', () => {
+            isPatientDrawing = false;
+            if (currentPatientUuid) {
+                sendPatientDrawingData('end');
+            }
+        });
+
+
+        function drawPatient(x, y, color, prevX, prevY) {
+            patientCtx.strokeStyle = color;
+            patientCtx.lineWidth = 2;
+            patientCtx.lineCap = 'round';
+            patientCtx.beginPath();
+            patientCtx.moveTo(prevX, prevY);
+            patientCtx.lineTo(x, y);
+            patientCtx.stroke();
+        }
+
+        function drawOnPatientCanvas(data) {
+            if (data.type === 'start') {
+                patientCtx.strokeStyle = data.color;
+                patientCtx.lineWidth = 2;
+                patientCtx.lineCap = 'round';
+                patientCtx.beginPath();
+                patientCtx.moveTo(data.x, data.y);
+                lastPatientX = data.x;
+                lastPatientY = data.y;
+            } else if (data.type === 'draw') {
+                patientCtx.strokeStyle = data.color;
+                patientCtx.lineWidth = 2;
+                patientCtx.lineCap = 'round';
+                patientCtx.lineTo(data.x, data.y);
+                patientCtx.stroke();
+                patientCtx.beginPath();
+                patientCtx.moveTo(data.x, data.y);
+            } else if (data.type === 'end') {
+                patientCtx.closePath();
+            } else if (data.type === 'clear') {
+                patientCtx.clearRect(0, 0, patientWhiteboardCanvas.width, patientWhiteboardCanvas.height);
+            }
+        }
+
+        function sendPatientDrawingData(type, x = null, y = null, color = null) {
+            if (patientSocket && patientSocket.readyState === WebSocket.OPEN && currentPatientUuid) {
+                const data = {
+                    type: type,
+                    x: x,
+                    y: y,
+                    color: color
+                };
+                patientSocket.send(JSON.stringify({
+                    'type': 'drawing_data',
+                    'data': data,
+                    'patient_uuid': currentPatientUuid
+                }));
+            }
+        };
+
+        // Color selection for patient whiteboard
+        patientWhiteboardColorButtons.forEach(button => {
+            button.onclick = function() {
+                patientDrawColor = this.dataset.color;
+                patientWhiteboardColorButtons.forEach(btn => btn.classList.remove('border-blue-500', 'border-4'));
+                this.classList.add('border-blue-500', 'border-4');
+            };
+        });
+
+        // Clear patient whiteboard button
+        clearPatientWhiteboardBtn.onclick = function() {
+            if (currentPatientUuid) {
+                patientCtx.clearRect(0, 0, patientWhiteboardCanvas.width, patientWhiteboardCanvas.height);
+                sendPatientDrawingData('clear');
+            }
+        };
+
     </script>
 {% endblock %}
