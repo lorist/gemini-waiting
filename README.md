@@ -1,6 +1,8 @@
 Django Patient Waiting Room App
 This is a Django-based web application that provides a real-time patient waiting room system for doctors, featuring a patient-facing queue joining page and a doctor's dashboard with live updates.
 
+Video: https://www.youtube.com/watch?v=J4zbKkNwJUw
+
 Features
 Doctor Management: Doctors can be added and managed via the Django Admin panel.
 
