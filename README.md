@@ -8,7 +8,11 @@ Patient Queueing: Patients can select a doctor from a dynamic list and join thei
 
 Real-time Status Updates: Utilizes Django Channels and WebSockets to provide live updates of patient statuses on the doctor's dashboard and the patient's view.
 
-Patient Status Management: Doctors can change a patient's status (Waiting, In Progress, Done, Cancelled) from their dashboard.
+Patient Status Management: Doctors can change a patient's status ('Waiting', 'In Progress', 'In Call', 'Done', 'Cancelled', 'Left Call') from their dashboard.
+
+Unique Patient Identification: Patients are assigned a unique UUID for consistent identification across sessions.
+
+Secure Virtual Room Access: Each patient entry has unique host_pin (for doctor) and guest_pin (for patient) for joining virtual meeting rooms (e.g., Pexip).
 
 Patient Removal: Doctors can remove patients from the active queue, which also moves them to a history view.
 
@@ -16,7 +20,25 @@ Patient History: A dedicated page for doctors to view a history of patients whos
 
 Patient Notifications & Redirection: When a patient's status is marked 'Done' or 'Cancelled', they are informed via a dialogue and redirected back to the join queue page.
 
-Responsive Design: Frontend utilizes Tailwind CSS for a mobile-first, responsive layout.
+Real-time Chat: Both doctors and patients can send and receive chat messages in real-time.
+
+Doctor's Dashboard: Chat is accessed via a dedicated "Chat" button per patient, with unread message badges.
+
+Patient's Page: Chat is accessed via a "Chat" button, which automatically opens if the doctor sends the first message, and shows unread message badges.
+
+Shared Whiteboard: A collaborative drawing whiteboard is available for doctors and patients.
+
+Activation: The whiteboard is activated by the doctor when the patient's status is 'In Progress' or 'In Call'.
+
+Real-time Drawing: Drawing actions are synchronized between the doctor and patient.
+
+Drawing History: When the whiteboard is opened, previous drawings are loaded.
+
+Color Selection & Clear: Users can select drawing colors and clear the canvas.
+
+Pexip Integration: Direct links are provided for doctors and patients to join Pexip virtual meeting rooms based on their unique pins and patient UUIDs.
+
+Responsive Design: Frontend utilizes Tailwind CSS for a mobile-first, responsive layout, with common styles centralized in base.html.
 
 Technologies Used
 Backend: Django (Python Web Framework)
@@ -73,6 +95,10 @@ CHANNEL_LAYERS = {
         'BACKEND': 'channels.layers.InMemoryChannelLayer',
     },
 }
+
+# Pexip Configuration (Add these lines)
+PEXIP_ADDRESS = 'your_pexip_domain.com' # Replace with your Pexip domain
+PEXIP_PATH = 'webapp' # Replace with your Pexip webapp path, e.g., 'webapp' or 'webrtc'
 
 # Template Configuration
 TEMPLATES = [
@@ -132,6 +158,7 @@ Ensure your waitingroom/models.py defines the Doctor, Patient, and WaitingRoomEn
 
 # waitingroom/models.py
 from django.db import models
+import uuid
 
 class Doctor(models.Model):
     name = models.CharField(max_length=100)
@@ -139,35 +166,61 @@ class Doctor(models.Model):
         return self.name
 
 class Patient(models.Model):
+    uuid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, null=False)
     name = models.CharField(max_length=100)
     def __str__(self):
         return self.name
 
 class WaitingRoomEntry(models.Model):
+    STATUS_CHOICES = [
+        ('Waiting', 'Waiting'),
+        ('In Progress', 'In Progress'),
+        ('In Call', 'In Call'),
+        ('Left Call', 'Left Call'),
+        ('Done', 'Done'),
+        ('Cancelled', 'Cancelled'),
+    ]
+
     doctor = models.ForeignKey(Doctor, on_delete=models.CASCADE, related_name='waiting_patients')
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE)
-    status = models.CharField(max_length=50, default='Waiting') # e.g., 'Waiting', 'In Progress', 'Done', 'Cancelled'
+    status = models.CharField(max_length=50, choices=STATUS_CHOICES, default='Waiting')
     arrived_at = models.DateTimeField(auto_now_add=True)
+    host_pin = models.CharField(max_length=6, unique=True, null=True, blank=True)
+    guest_pin = models.CharField(max_length=6, unique=True, null=True, blank=True)
+    added_by_doctor = models.BooleanField(default=False)
+    whiteboard_active = models.BooleanField(default=False)
+    whiteboard_data = models.TextField(default='[]')
+
     class Meta:
         ordering = ['arrived_at']
+
     def __str__(self):
         return f"{self.patient.name} for Dr. {self.doctor.name} - {self.status}"
 
 8. Define App Views
-Ensure your waitingroom/views.py contains the necessary views:
+Ensure your waitingroom/views.py contains the necessary views and passes Pexip settings:
 
 # waitingroom/views.py
 from django.shortcuts import render, get_object_or_404
 from .models import Doctor, WaitingRoomEntry
+from django.conf import settings
 
 def patient_waiting_room_view(request):
     doctors = Doctor.objects.all().order_by('name')
-    context = {'doctors': doctors}
+    context = {
+        'doctors': doctors,
+        'pexip_address': settings.PEXIP_ADDRESS,
+        'pexip_path': settings.PEXIP_PATH,
+    }
     return render(request, 'waitingroom/patient_waiting_room.html', context)
 
 def doctor_dashboard_view(request, doctor_id):
     doctor = get_object_or_404(Doctor, pk=doctor_id)
-    context = {'doctor': doctor}
+    context = {
+        'doctor': doctor,
+        'pexip_address': settings.PEXIP_ADDRESS,
+        'pexip_path': settings.PEXIP_PATH,
+    }
     return render(request, 'waitingroom/doctor_dashboard.html', context)
 
 def doctor_history_view(request, doctor_id):
@@ -207,7 +260,7 @@ urlpatterns = [
 ]
 
 10. Register Models with Admin
-Create or update waitingroom/admin.py to register your models for admin access:
+Create or update waitingroom/admin.py to register your models for admin access, including UUID and PINs:
 
 # waitingroom/admin.py
 from django.contrib import admin
@@ -220,20 +273,22 @@ class DoctorAdmin(admin.ModelAdmin):
 
 @admin.register(Patient)
 class PatientAdmin(admin.ModelAdmin):
-    list_display = ('name',)
-    search_fields = ('name',)
+    list_display = ('name', 'uuid',)
+    search_fields = ('name', 'uuid',)
+    readonly_fields = ('uuid',)
 
 @admin.register(WaitingRoomEntry)
 class WaitingRoomEntryAdmin(admin.ModelAdmin):
-    list_display = ('doctor', 'patient', 'status', 'arrived_at')
-    list_filter = ('status', 'doctor')
-    search_fields = ('patient__name', 'doctor__name')
+    list_display = ('doctor', 'patient', 'status', 'arrived_at', 'host_pin', 'guest_pin', 'whiteboard_active') # Added PINs and whiteboard_active
+    list_filter = ('status', 'doctor', 'whiteboard_active') # Filter by whiteboard active status
+    search_fields = ('patient__name', 'doctor__name', 'patient__uuid', 'host_pin', 'guest_pin') # Search by PINs
     raw_id_fields = ('doctor', 'patient')
+
 
 11. Create Templates
 Ensure you have the following HTML templates:
 
-templates/base.html (for the base layout)
+templates/base.html (for the base layout, now containing common styles)
 
 waitingroom/templates/waitingroom/patient_waiting_room.html
 
@@ -254,8 +309,6 @@ Follow the prompts to create your admin login.
 Start the Daphne ASGI server:
 
 daphne -p 8000 --verbosity 2 waitingproj.asgi:application
-or
-daphne --bind 0.0.0.0 -p 8000 --verbosity 2 waitingproj.asgi:application
 
 The --verbosity 2 flag enables auto-reloading during development.
 
@@ -266,13 +319,8 @@ Patient View: Open http://127.00.1:8000/join-queue/ in your browser. Select a do
 
 Doctor Dashboard: Open http://127.0.0.1:8000/doctor/<doctor_id>/ (replace <doctor_id> with the ID of a doctor you created, e.g., http://127.0.0.1:8000/doctor/1/). You'll see patients appear in real-time. Change their status or remove them.
 
+Chat: Click the "Chat" button next to a patient to open the chat interface.
+
+Whiteboard: For patients with 'In Progress' or 'In Call' status, click the "Whiteboard" button to open the shared whiteboard.
+
 Doctor History: From the doctor dashboard, click "View Patient History" or navigate directly to http://127.0.0.1:8000/doctor-history/<doctor_id>/ to see completed or cancelled appointments.
-
-service policy example: https://127.0.0.1:8000/policy/v1/service/configuration?call_direction=dial_in&protocol=api&bandwidth=0&vendor=Mozilla%2F5.0+%28Macintosh%3B+Intel+Mac+OS+X+10_15_7%29+AppleWebKit%2F537.36+%28KHTML%2C+like+Gecko%29+Chrome%2F137.0.0.0+Safari%2F537.36+Webapp3%2F10.0.0%2Bdf46e0355&encryption=On&registered=False&trigger=web&remote_display_name=dennis&remote_alias=dennis&remote_address=10.0.3.237&remote_port=59506&call_tag=&idp_uuid=&has_authenticated_display_name=False&supports_direct_media=True&teams_tenant_id=&third_party_passcode=&display_count=&location=internal&node_ip=10.0.0.14&version_id=38&pseudo_version_id=81843.0.0&local_alias=fb1df9f8-a487-46fb-bbdb-316539aeab3d&request_id=2fe46e75-9cd5-4548-8b7c-650787734c36
-
-
-Contributing
-Feel free to fork this repository, make improvements, and submit pull requests.
-
-License
-[Specify your license here, e.g., MIT, Apache 2.0, etc.]
